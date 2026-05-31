@@ -1,0 +1,47 @@
+{
+  "classes": [
+    "Allergic Rhinitis",
+    "Asthma",
+    "Bronchitis",
+    "COPD",
+    "COVID-19",
+    "Common Cold",
+    "Cystic Fibrosis",
+    "Influenza",
+    "Lung Cancer",
+    "Pneumonia",
+    "Pneumothorax",
+    "Sinusitis",
+    "Sleep Apnea",
+    "Tuberculosis"
+  ],
+  "features_base": [
+    "AGE",
+    "Gender",
+    "smoke",
+    "PEFR",
+    "O2",
+    "Scan",
+    "Asthama",
+    "Other diseaes"
+  ],
+  "features_equipe": [
+    "AGE",
+    "Gender",
+    "smoke",
+    "FVC",
+    "FEC1",
+    "FEV1_FVC_Ratio",
+    "PEFR",
+    "O2",
+    "ABG-P-O2",
+    "ABG-P-CO2",
+    "ABG-pH Level",
+    "Scan",
+    "Asthama",
+    "Other diseaes",
+    "Peak_Flow"
+  ],
+  "precision_base": 53.2,
+  "precision_equipe": 96.8
+}

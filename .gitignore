@@ -1,0 +1,19 @@
+# Python / Backend
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+*.pkl
+*.pkl.part
+Backend/app/ml_models/
+
+# Frontend
+node_modules/
+dist/
+build/
+Frontend/.vite/
+*.log
+.env.local
