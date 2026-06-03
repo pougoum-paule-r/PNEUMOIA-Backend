@@ -70,6 +70,33 @@ async def get_current_medecin(
     return medecin
 
 
+# ── Dépendance FastAPI — admin connecté ──────────────────────────
+async def get_current_admin(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer),
+    db: AsyncSession = Depends(get_db),
+):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Token invalide ou expiré",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = decode_token(credentials.credentials)
+        admin_id: str = payload.get("sub")
+        role: str = payload.get("role", "")
+        if not admin_id or role != "admin":
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    from app.models.admin import Admin
+    admin = await db.get(Admin, admin_id)
+    if not admin:
+        raise HTTPException(status_code=404, detail="Admin introuvable")
+
+    return admin
+
+
 # ── Tokens divers ─────────────────────────────────────────────────
 def generate_activation_token() -> str:
     return secrets.token_urlsafe(32)
