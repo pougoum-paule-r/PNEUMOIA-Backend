@@ -29,12 +29,9 @@ async def admin_login(
     if not admin or not verify_password(body.password, admin.password_hash):
         raise HTTPException(401, "Email ou mot de passe incorrect.")
 
-    # Première connexion — sauvegarder le numéro
     if not admin.phone:
         admin.phone = body.phone
         await db.commit()
-
-    # Connexions suivantes — vérifier que le numéro correspond
     elif admin.phone != body.phone:
         raise HTTPException(401, "Numéro de téléphone incorrect.")
 
@@ -92,7 +89,13 @@ async def get_demandes(
     db: AsyncSession = Depends(get_db),
     admin: Admin = Depends(get_current_admin),
 ):
-    return await AdminService.get_pending_medics(db)
+    """
+    Retourne tous les médecins en attente avec :
+    - Toutes les données personnelles
+    - Photo de profil (URL complète)
+    - Tous les documents (URL + métadonnées)
+    """
+    return await AdminService.get_demandes(db)
 
 
 @router.post("/demandes/{medecin_id}/valider")
@@ -101,7 +104,7 @@ async def valider_medecin(
     db: AsyncSession = Depends(get_db),
     admin: Admin = Depends(get_current_admin),
 ):
-    return await AdminService.validate_medic(db, medecin_id, admin.id)
+    return await AdminService.valider_medecin(db, medecin_id, admin.id)
 
 
 @router.post("/demandes/{medecin_id}/rejeter")
@@ -111,4 +114,4 @@ async def rejeter_medecin(
     db: AsyncSession = Depends(get_db),
     admin: Admin = Depends(get_current_admin),
 ):
-    return await AdminService.reject_medic(db, medecin_id, body.motif)
+    return await AdminService.rejeter_medecin(db, medecin_id, body.motif)
