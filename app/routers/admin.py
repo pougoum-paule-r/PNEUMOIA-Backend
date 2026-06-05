@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from typing import Optional
 
 from app.database import get_db
 from app.core.security import get_current_admin, verify_password, create_access_token
@@ -82,7 +83,7 @@ async def reset_confirm(
     return {"message": "Mot de passe mis à jour avec succès."}
 
 
-# ── Demandes médecins ──────────────────────────────────────────────────────────
+# ── Demandes en attente ────────────────────────────────────────────────────────
 
 @router.get("/demandes")
 async def get_demandes(
@@ -115,3 +116,39 @@ async def rejeter_medecin(
     admin: Admin = Depends(get_current_admin),
 ):
     return await AdminService.rejeter_medecin(db, medecin_id, body.motif)
+
+
+# ── Validées par mois/année ────────────────────────────────────────────────────
+
+@router.get("/demandes/valides")
+async def get_valides(
+    mois:  Optional[int] = None,
+    annee: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Retourne les médecins validés pour un mois et une année donnés.
+    Si mois/annee non fournis, retourne le mois en cours.
+    GET /api/admin/demandes/valides?mois=6&annee=2026
+    """
+    return await AdminService.get_valides(db, mois, annee)
+
+
+# ── Médecins par statut ────────────────────────────────────────────────────────
+
+@router.get("/demandes/statut/{statut}")
+async def get_demandes_par_statut(
+    statut: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Retourne les médecins filtrés par statut.
+    Valeurs : en_attente | valide | rejete | suspendu
+    GET /api/admin/demandes/statut/rejete
+    GET /api/admin/demandes/statut/suspendu
+    """
+    if statut not in ("en_attente", "valide", "rejete", "suspendu"):
+        raise HTTPException(400, f"Statut invalide : {statut}")
+    return await AdminService.get_demandes_par_statut(db, statut)

@@ -9,6 +9,7 @@ from app.core.security import hash_password
 from app.config import settings
 from twilio.rest import Client
 from datetime import datetime, timedelta
+from typing import Optional
 import random
 import secrets
 
@@ -62,22 +63,21 @@ def format_medecin(m: Medecin) -> dict:
         "photo_url":     build_url(m.photo_url),
         "statut":        m.statut,
         "created_at":    m.created_at.isoformat() if m.created_at else None,
+        # Traçabilité validation
+        "valide_le":     m.valide_le.isoformat() if m.valide_le else None,
+        "valide_par":    m.valideur.email if m.valideur else None,
+        "motif_rejet":   m.motif_rejet,
         "documents":     [format_document(d) for d in m.documents],
     }
 
 
 class AdminService:
 
-    # ── Demandes médecins ──────────────────────────────────────────────────────
+    # ── Demandes en attente ────────────────────────────────────────────────────
 
     @staticmethod
     async def get_demandes(db: AsyncSession) -> list[dict]:
-        """
-        Retourne tous les médecins en attente avec :
-        - Toutes les données personnelles
-        - Photo de profil (URL complète)
-        - Tous les documents (URL + métadonnées)
-        """
+        """Retourne tous les médecins en attente avec documents et photo."""
         result = await db.execute(
             select(Medecin)
             .where(Medecin.statut == "en_attente")
@@ -86,6 +86,66 @@ class AdminService:
         )
         medecins = result.scalars().all()
         return [format_medecin(m) for m in medecins]
+
+    # ── Validées par mois/année ────────────────────────────────────────────────
+
+    @staticmethod
+    async def get_valides(
+        db: AsyncSession,
+        mois: Optional[int] = None,
+        annee: Optional[int] = None,
+    ) -> list[dict]:
+        """
+        Retourne les médecins validés pour un mois et une année donnés.
+        Si mois/annee non fournis, retourne le mois en cours.
+        """
+        now   = datetime.utcnow()
+        m     = mois  or now.month
+        y     = annee or now.year
+
+        debut = datetime(y, m, 1)
+        fin   = datetime(y + 1, 1, 1) if m == 12 else datetime(y, m + 1, 1)
+
+        result = await db.execute(
+            select(Medecin)
+            .where(
+                Medecin.statut    == "valide",
+                Medecin.valide_le >= debut,
+                Medecin.valide_le <  fin,
+            )
+            .options(
+                selectinload(Medecin.documents),
+                selectinload(Medecin.valideur),
+            )
+            .order_by(Medecin.valide_le.desc())
+        )
+        medecins = result.scalars().all()
+        return [format_medecin(m) for m in medecins]
+
+    # ── Médecins par statut ────────────────────────────────────────────────────
+
+    @staticmethod
+    async def get_demandes_par_statut(
+        db: AsyncSession,
+        statut: str,
+    ) -> list[dict]:
+        """
+        Retourne les médecins filtrés par statut.
+        Valeurs : en_attente | valide | rejete | suspendu
+        """
+        result = await db.execute(
+            select(Medecin)
+            .where(Medecin.statut == statut)
+            .options(
+                selectinload(Medecin.documents),
+                selectinload(Medecin.valideur),
+            )
+            .order_by(Medecin.created_at.desc())
+        )
+        medecins = result.scalars().all()
+        return [format_medecin(m) for m in medecins]
+
+    # ── Valider un médecin ─────────────────────────────────────────────────────
 
     @staticmethod
     async def valider_medecin(db: AsyncSession, medecin_id: str, admin_id: str) -> dict:
@@ -124,6 +184,8 @@ class AdminService:
             "lien_activation": lien,
         }
 
+    # ── Rejeter un médecin ─────────────────────────────────────────────────────
+
     @staticmethod
     async def rejeter_medecin(db: AsyncSession, medecin_id: str, motif: str) -> dict:
         """Refuse un médecin avec un motif."""
@@ -158,10 +220,8 @@ class AdminService:
 
         if not admin:
             raise HTTPException(status_code=400, detail="Aucun compte trouvé avec cet email.")
-
         if not admin.phone:
             raise HTTPException(status_code=400, detail="Aucun numéro associé à ce compte.")
-
         if admin.phone != phone:
             raise HTTPException(status_code=400, detail="Numéro de téléphone incorrect.")
 
@@ -184,7 +244,6 @@ class AdminService:
 
         if not admin:
             raise HTTPException(status_code=400, detail="Compte introuvable.")
-
         if not admin.is_otp_valid(otp):
             raise HTTPException(status_code=400, detail="Code OTP invalide ou expiré.")
 

@@ -6,6 +6,8 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.routers import auth, admin, diagnostics, patients, consultations
+from app.routers.medecins    import router_medecins
+from app.routers.communautes import router_communautes
 from app.config import settings
 from app.database import engine, Base
 from app.init_db import seed_admin
@@ -14,7 +16,7 @@ app = FastAPI(title="PneumoIA API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,3 +46,10 @@ async def startup():
 @app.get("/")
 def root():
     return {"status": "PneumoIA API is running"}
+
+
+app.include_router(diagnostics.router, prefix="/api/v1")
+app.include_router(patients.router)
+app.include_router(consultations.router)
+app.include_router(router_medecins)
+app.include_router(router_communautes)

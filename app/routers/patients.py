@@ -67,6 +67,61 @@ async def rechercher_patients(
     return result.scalars().all()
 
 
+# ── GET /patients/mes-patients — Patients du médecin connecté ────
+@router.get("/mes-patients", response_model=list[PatientOut])
+async def mes_patients(
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    result = await db.execute(
+        select(Patient)
+        .where(Patient.created_by == medecin.id)
+        .order_by(Patient.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+# ── GET /patients/:id/consultations ──────────────────────────────
+@router.get("/{patient_id}/consultations")
+async def consultations_patient(
+    patient_id: str,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from app.models.consultation import Consultation
+    from sqlalchemy.orm import selectinload
+
+    patient = await db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient introuvable")
+    if patient.created_by != medecin.id:
+        raise HTTPException(403, "Accès refusé")
+
+    result = await db.execute(
+        select(Consultation)
+        .where(Consultation.patient_id == patient_id)
+        .options(selectinload(Consultation.diagnostic))
+        .order_by(Consultation.created_at.desc())
+    )
+    consultations = result.scalars().all()
+
+    return [
+        {
+            "id":              c.id,
+            "statut":          c.statut,
+            "created_at":      c.created_at.isoformat(),
+            "observations":    c.observations,
+            "recommandations": c.recommandations,
+            "prescriptions":   c.prescriptions,
+            "diagnostic": {
+                "maladies":     c.diagnostic.maladies     if c.diagnostic else [],
+                "etat_patient": c.diagnostic.etat_patient if c.diagnostic else None,
+            } if c.diagnostic else None,
+        }
+        for c in consultations
+    ]
+
+
 # ── GET /patients/:id — Détail patient ───────────────────────────
 @router.get("/{patient_id}", response_model=PatientOut)
 async def get_patient(
