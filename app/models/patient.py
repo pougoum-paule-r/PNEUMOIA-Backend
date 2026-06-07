@@ -53,6 +53,10 @@ class Patient(Base):
     created_at = Column(DateTime,   nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime,   nullable=True,  onupdate=datetime.utcnow)
 
+    # ── Soft-delete ───────────────────────────────────────────────
+    deleted_at = Column(DateTime,   nullable=True, default=None)
+    deleted_by = Column(String(15), ForeignKey("medecins.id", ondelete="SET NULL"), nullable=True)
+
     # ── Relations ─────────────────────────────────────────────────
     createur      = relationship("Medecin",      back_populates="patients_crees", foreign_keys=[created_by])
     consultations = relationship("Consultation", back_populates="patient")

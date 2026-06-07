@@ -12,7 +12,7 @@ from app.models.acces_patient import AccesPatient
 from app.models.diagnostic_ia import DiagnosticIA
 from app.schemas.consultation import (
     ConsultationCreate, ConsultationOut,
-    AntecedentsIn, SymptomesIn, OpinionIn,
+    AntecedentsIn, SymptomesIn, OpinionIn, StatutCliniqueIn,
 )
 
 router = APIRouter(prefix="/api/v1/consultations", tags=["Consultations"])
@@ -147,6 +147,15 @@ async def sauvegarder_opinion(
     )
     c.statut = "terminee" if a_donne_avis else "en_attente"
 
+    # Alimenter statut_clinique depuis diagnostic.etat_patient (si pas encore défini)
+    if not c.statut_clinique:
+        diag_result = await db.execute(
+            select(DiagnosticIA).where(DiagnosticIA.consultation_id == consultation_id)
+        )
+        diag = diag_result.scalar_one_or_none()
+        if diag and diag.etat_patient:
+            c.statut_clinique = diag.etat_patient
+
     await db.commit()
 
     # ── Partage avec un médecin ──────────────────────────────────
@@ -209,6 +218,20 @@ async def lister_consultations(
         .limit(50)
     )
     return result.scalars().all()
+
+
+# ── PATCH /consultations/:id/statut-clinique — Modifier l'état clinique ──
+@router.patch("/{consultation_id}/statut-clinique", status_code=200)
+async def modifier_statut_clinique(
+    consultation_id: str,
+    payload: StatutCliniqueIn,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    c = await get_ma_consultation(consultation_id, medecin.id, db)
+    c.statut_clinique = payload.statut_clinique
+    await db.commit()
+    return {"statut_clinique": c.statut_clinique, "consultation_id": consultation_id}
 
 
 # ── GET /consultations/en-attente — Consultations sans avis ──────

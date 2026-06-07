@@ -10,6 +10,7 @@ venv/
 *.onnx
 *.pkl.part
 Backend/app/ml_models/
+Backend/uploads/
 
 # Frontend
 node_modules/

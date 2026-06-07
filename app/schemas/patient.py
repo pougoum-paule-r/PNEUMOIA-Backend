@@ -1,7 +1,7 @@
 # app/schemas/patient.py
 from pydantic import BaseModel
 from typing import Optional
-from datetime import date
+from datetime import date, datetime
 
 
 class PatientCreate(BaseModel):
@@ -40,6 +40,7 @@ class PatientOut(BaseModel):
     telephone_urgence:   Optional[str]
     allergies:           list
     antecedents:         dict
+    deleted_at:          Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

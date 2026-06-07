@@ -39,13 +39,18 @@ class Consultation(Base):
     #   fvc, fec1, peak_flow, pefr_anormal, abg_co2_anormal, abg_ph_anormal
     # }
 
-    # ── STATUT ────────────────────────────────────────────────────────
-    # en_attente = diagnostic IA fait mais médecin n'a pas encore donné son avis
-    # terminee   = médecin a validé + prescription faite
+    # ── STATUTS ───────────────────────────────────────────────────────
+    # statut          : avis médecin  → en_attente / terminee
+    # statut_clinique : état patient  → stable / surveille / urgent / critique
     statut = Column(
         Enum("en_attente", "terminee", name="statut_consultation"),
         nullable=False,
         default="en_attente",
+    )
+    statut_clinique = Column(
+        Enum("stable", "surveille", "urgent", "critique", name="statut_clinique_enum"),
+        nullable=True,
+        default=None,
     )
 
     # ── ÉTAPE 4 — Avis médecin (optionnel — si absent = en_attente) ───
