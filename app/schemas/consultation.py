@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 from datetime import datetime
 
+StatutClinique = Literal["stable", "surveille", "urgent", "critique"]
+
 
 # ── Création ─────────────────────────────────────────────────────
 class ConsultationCreate(BaseModel):
@@ -154,6 +156,11 @@ class OpinionIn(BaseModel):
 
     # Partage
     partage:               PartageIn     = PartageIn()
+
+
+# ── PATCH statut clinique ────────────────────────────────────────
+class StatutCliniqueIn(BaseModel):
+    statut_clinique: StatutClinique
 
 
 # ── Accès inter-médecins ─────────────────────────────────────────
