@@ -135,6 +135,100 @@ async def get_valides(
     return await AdminService.get_valides(db, mois, annee)
 
 
+# ── Actions sur les médecins ──────────────────────────────────────────────────
+
+@router.post("/medecins/{medecin_id}/suspendre")
+async def suspendre_medecin(
+    medecin_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Suspend un médecin — statut passe à "suspendu"
+    Le médecin ne peut plus se connecter.
+    """
+    return await AdminService.suspendre_medecin(
+        db, medecin_id,
+        raison  = body.get("raison", ""),
+        duree   = body.get("duree",  ""),
+        message = body.get("message",""),
+        admin_id= admin.id,
+    )
+
+
+@router.post("/medecins/{medecin_id}/reactiver")
+async def reactiver_medecin(
+    medecin_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Réactive un médecin suspendu — statut repasse à "valide"
+    """
+    return await AdminService.reactiver_medecin(db, medecin_id, admin.id)
+
+
+@router.delete("/medecins/{medecin_id}")
+async def supprimer_medecin(
+    medecin_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Supprime définitivement un médecin et toutes ses données.
+    Action irréversible.
+    """
+    return await AdminService.supprimer_medecin(db, medecin_id)
+
+
+# ── Inscriptions refusées ─────────────────────────────────────────────────────
+
+@router.get("/demandes/refusees")
+async def get_demandes_refusees(
+    ville: str | None = None,
+    motif: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Retourne les demandes avec statut 'rejete'.
+    Filtres optionnels : ville, motif.
+    """
+    return await AdminService.get_demandes_refusees(db, ville=ville, motif=motif)
+
+
+@router.delete("/demandes/{medecin_id}/refusees")
+async def supprimer_dossier_refuse(
+    medecin_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Supprime définitivement un dossier refusé.
+    """
+    return await AdminService.supprimer_dossier_refuse(db, medecin_id)
+
+
+@router.post("/demandes/{medecin_id}/relancer")
+async def relancer_medecin(
+    medecin_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Envoie un e-mail de relance au médecin refusé.
+    Body: { message: str }
+    Le médecin peut re-soumettre sa demande.
+    """
+    return await AdminService.relancer_medecin(
+        db, medecin_id,
+        message = body.get("message", ""),
+        admin_id = admin.id,
+    )
+
+
 # ── Médecins par statut ────────────────────────────────────────────────────────
 
 @router.get("/demandes/statut/{statut}")
@@ -152,3 +246,53 @@ async def get_demandes_par_statut(
     if statut not in ("en_attente", "valide", "rejete", "suspendu"):
         raise HTTPException(400, f"Statut invalide : {statut}")
     return await AdminService.get_demandes_par_statut(db, statut)
+
+
+# ── Inscriptions refusées ──────────────────────────────────────────────────────
+
+@router.get("/demandes/refusees")
+async def get_demandes_refusees(
+    ville:  Optional[str] = None,
+    motif:  Optional[str] = None,
+    db:     AsyncSession  = Depends(get_db),
+    admin:  Admin         = Depends(get_current_admin),
+):
+    """
+    Retourne les médecins avec statut 'rejete'.
+    Filtres optionnels : ville, motif.
+    GET /api/admin/demandes/refusees?ville=Douala&motif=CNOM invalide
+    """
+    return await AdminService.get_demandes_refusees(db, ville=ville, motif=motif)
+
+
+@router.delete("/demandes/{medecin_id}/refusees")
+async def supprimer_dossier_refuse(
+    medecin_id: str,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Supprime définitivement un dossier refusé.
+    DELETE /api/admin/demandes/{id}/refusees
+    """
+    return await AdminService.supprimer_dossier_refuse(db, medecin_id)
+
+
+@router.post("/demandes/{medecin_id}/relancer")
+async def relancer_medecin(
+    medecin_id: str,
+    body:  dict,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Envoie un e-mail de relance au médecin refusé.
+    POST /api/admin/demandes/{id}/relancer
+    Body: { "message": "..." }
+    """
+    return await AdminService.relancer_medecin(
+        db,
+        medecin_id = medecin_id,
+        message    = body.get("message", ""),
+        admin_id   = admin.id,
+    )
