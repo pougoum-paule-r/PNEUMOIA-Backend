@@ -17,8 +17,14 @@ from app.core.security           import (hash_password, verify_password,
                                           create_access_token,
                                           generate_activation_token,
                                           generate_otp)
-from app.core.security import get_current_medecin
-from app.services.email_service  import send_otp_email
+from app.core.security import get_current_medecin, decode_token
+from app.models.admin  import Admin
+from sqlalchemy        import update as sa_update
+from jose              import JWTError
+from app.services.email_service  import (
+    send_otp_email, send_reset_otp_email,
+    send_piratage_admin_email, send_piratage_medecin_email,
+)
 from app.services.sms_service    import notify_admin_new_medecin
 from app.config import settings
 
@@ -447,6 +453,159 @@ async def get_documents(
         }
         for d in docs
     ]
+
+
+# ─────────────────────────────────────────────────────────────
+#  POST /api/v1/auth/forgot-password
+#  Vérifie l'email → envoie un OTP de réinitialisation
+# ─────────────────────────────────────────────────────────────
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+@router.post("/forgot-password", response_model=MessageResponse)
+async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result  = await db.execute(select(Medecin).where(Medecin.email == body.email))
+    medecin = result.scalar_one_or_none()
+
+    if not medecin:
+        raise HTTPException(404, "Email introuvable ou inexistant dans la base de données")
+
+    # Invalider tout OTP reset précédent encore actif
+    await db.execute(
+        sa_update(OTPCode)
+        .where(OTPCode.medecin_id == medecin.id, OTPCode.purpose == 'reset', OTPCode.used == False)
+        .values(used=True)
+    )
+
+    otp    = generate_otp()
+    expiry = datetime.utcnow() + timedelta(minutes=5)
+    otp_entry = OTPCode(
+        id=generate_doc_id(),
+        medecin_id=medecin.id,
+        code=otp,
+        expires_at=expiry,
+        used=False,
+        purpose='reset',
+        fail_count=0,
+    )
+    db.add(otp_entry)
+    await db.commit()
+
+    try:
+        send_reset_otp_email(medecin.email, medecin.nom, otp)
+    except Exception as e:
+        print(f"⚠️ Email reset OTP non envoyé : {e}")
+        raise HTTPException(500, "Erreur lors de l'envoi du code OTP. Réessayez.")
+
+    return {"message": "Code OTP envoyé à votre email. Valable 5 minutes.", "medecin_id": str(medecin.id)}
+
+
+# ─────────────────────────────────────────────────────────────
+#  POST /api/v1/auth/reset-verify-otp
+#  Vérifie le code (max 3 tentatives) → retourne un reset_token
+# ─────────────────────────────────────────────────────────────
+class ResetVerifyOTPRequest(BaseModel):
+    medecin_id: str
+    code:       str
+
+@router.post("/reset-verify-otp")
+async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(OTPCode)
+        .where(OTPCode.medecin_id == body.medecin_id)
+        .where(OTPCode.purpose    == 'reset')
+        .where(OTPCode.used       == False)
+        .order_by(OTPCode.created_at.desc())
+        .limit(1)
+    )
+    otp_entry = result.scalar_one_or_none()
+
+    if not otp_entry:
+        raise HTTPException(404, "Aucun code de réinitialisation en cours. Recommencez.")
+
+    if datetime.utcnow() > otp_entry.expires_at:
+        otp_entry.used = True
+        await db.commit()
+        raise HTTPException(401, "Code OTP expiré. Demandez un nouveau code.")
+
+    if otp_entry.fail_count >= 3:
+        raise HTTPException(429, "Trop de tentatives incorrectes. Demandez un nouveau code.")
+
+    if otp_entry.code != body.code:
+        otp_entry.fail_count += 1
+        await db.commit()
+
+        if otp_entry.fail_count >= 3:
+            # Notifier admin + médecin
+            medecin = await db.get(Medecin, body.medecin_id)
+            admins  = (await db.execute(select(Admin))).scalars().all()
+            for admin in admins:
+                try:
+                    send_piratage_admin_email(
+                        admin.email, medecin.nom, medecin.email,
+                        medecin.id, otp_entry.fail_count
+                    )
+                except Exception as e:
+                    print(f"⚠️ Email admin non envoyé : {e}")
+            try:
+                send_piratage_medecin_email(medecin.email, medecin.nom)
+            except Exception as e:
+                print(f"⚠️ Email médecin non envoyé : {e}")
+            raise HTTPException(
+                429,
+                "Compte bloqué après 3 tentatives incorrectes. "
+                "L'administrateur a été notifié. Demandez un nouveau code."
+            )
+
+        restantes = 3 - otp_entry.fail_count
+        raise HTTPException(
+            401,
+            f"Le code à usage unique que vous avez entré est incorrect. "
+            f"{restantes} tentative(s) restante(s)."
+        )
+
+    # Code correct
+    otp_entry.used = True
+    await db.commit()
+
+    reset_token = create_access_token(
+        {"sub": str(body.medecin_id), "purpose": "reset_password"},
+        expires_minutes=10,
+    )
+    return {"reset_token": reset_token, "message": "Code vérifié. Vous pouvez réinitialiser votre mot de passe."}
+
+
+# ─────────────────────────────────────────────────────────────
+#  POST /api/v1/auth/reset-password
+#  Reçoit le reset_token + nouveau mot de passe
+# ─────────────────────────────────────────────────────────────
+class ResetPasswordRequest(BaseModel):
+    reset_token:  str
+    new_password: str
+
+@router.post("/reset-password", response_model=MessageResponse)
+async def reset_password_endpoint(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    try:
+        payload = decode_token(body.reset_token)
+        if payload.get("purpose") != "reset_password":
+            raise HTTPException(400, "Token de réinitialisation invalide")
+        medecin_id = payload.get("sub")
+        if not medecin_id:
+            raise HTTPException(400, "Token invalide")
+    except JWTError:
+        raise HTTPException(401, "Token de réinitialisation invalide ou expiré")
+
+    if len(body.new_password) < 8:
+        raise HTTPException(400, "Le mot de passe doit contenir au moins 8 caractères")
+
+    medecin = await db.get(Medecin, medecin_id)
+    if not medecin:
+        raise HTTPException(404, "Médecin introuvable")
+
+    medecin.password_hash = hash_password(body.new_password)
+    await db.commit()
+
+    return {"message": "Mot de passe réinitialisé avec succès. Vous pouvez maintenant vous connecter."}
 
 
 # ─────────────────────────────────────────────────────────────
