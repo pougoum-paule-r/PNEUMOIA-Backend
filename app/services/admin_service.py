@@ -317,13 +317,17 @@ class AdminService:
 
         lien = f"{settings.FRONTEND_URL}/medecin/activer?token={token}"
 
-        # Email d'activation — géré par le binôme SMTP
+        # Email d'activation
+        from app.services.email_service import send_activation_email
+        from fastapi.concurrency import run_in_threadpool
         email_envoye = False
         try:
-            # from app.services.email_service import send_activation_email
-            # await send_activation_email(medecin.email, lien)
+            await run_in_threadpool(
+                send_activation_email, medecin.email, medecin.nom, token
+            )
             email_envoye = True
-        except Exception:
+        except Exception as e:
+            print(f"❌ Email activation non envoyé : {e}")
             email_envoye = False
 
         return {
@@ -350,13 +354,15 @@ class AdminService:
         medecin.motif_rejet = motif
         await db.commit()
 
-        # Email de refus — géré par le binôme SMTP
+        # Email de refus
+        from app.services.email_service import send_rejection_email
+        from fastapi.concurrency import run_in_threadpool
         try:
-            # from app.services.email_service import send_rejection_email
-            # await send_rejection_email(medecin.email, motif)
-            pass
-        except Exception:
-            pass
+            await run_in_threadpool(
+                send_rejection_email, medecin.email, medecin.nom, motif
+            )
+        except Exception as e:
+            print(f"❌ Email refus non envoyé : {e}")
 
         return {"message": "Médecin refusé. Notification envoyée."}
 

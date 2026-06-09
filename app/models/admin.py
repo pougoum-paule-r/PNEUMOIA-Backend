@@ -15,6 +15,7 @@ class Admin(Base):
 
     # ── Profil ─────────────────────────────────────────────────────────────────
     id            = Column(String(15),  primary_key=True, default=generate_id)
+    nom           = Column(String(100), nullable=True)
     email         = Column(String(150), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
 

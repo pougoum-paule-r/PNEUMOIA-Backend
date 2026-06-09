@@ -197,7 +197,7 @@ async def register(
 
     # ── 7. SMS à l'admin ───────────────────────────────────────
     try:
-        notify_admin_new_medecin(nom, prenom, specialite)
+        await notify_admin_new_medecin(nom, prenom, specialite, settings.ADMIN_PHONE)
         print(f"✅ SMS envoyé à {settings.ADMIN_PHONE}")
     except Exception as e:
         print(f"❌ SMS non envoyé — Erreur Twilio : {e}")
