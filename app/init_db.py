@@ -5,6 +5,8 @@ from app.core.security import hash_password
 from app.config import settings
 
 async def seed_admin(db: AsyncSession):
+    if not settings.ADMIN_EMAIL or not settings.ADMIN_PASSWORD:
+        return
     result = await db.execute(select(Admin).where(Admin.email == settings.ADMIN_EMAIL))
     if not result.scalar_one_or_none():
         new_admin = Admin(

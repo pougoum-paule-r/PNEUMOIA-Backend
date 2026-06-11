@@ -18,6 +18,7 @@ from app.models.audit_log        import AuditLog
 from app.models.cas_clinique_public import CasCliniquPublic
 from app.models.question_medecin import QuestionMedecin
 from app.models.faq_publiee      import FAQPubliee
+from app.models.avis_patient       import AvisPatient
 
 __all__ = [
     "Admin",
@@ -39,4 +40,5 @@ __all__ = [
     "CasCliniquPublic",
     "QuestionMedecin",
     "FAQPubliee"
+    "AvisPatient",
 ]

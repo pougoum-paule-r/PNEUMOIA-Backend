@@ -27,9 +27,9 @@ class Settings(BaseSettings):
     BACKEND_URL:  str = "http://localhost:8000"
     UPLOAD_DIR:   str = "./uploads"
 
-    # ── Admin initial ─────────────────────────────────────────
-    ADMIN_EMAIL:    str
-    ADMIN_PASSWORD: str
+    # ── Admin initial (optionnel — seulement pour init_db) ───
+    ADMIN_EMAIL:    str | None = None
+    ADMIN_PASSWORD: str | None = None
 
     class Config:
         env_file = str(ENV_FILE)

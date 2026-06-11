@@ -285,8 +285,9 @@ class AdminService:
         # Email d'activation via Brevo
         email_envoye = False
         try:
-            # from app.services.email_service import send_activation_email
-            # await send_activation_email(medecin.email, lien)
+            await run_in_threadpool(
+                send_activation_email, medecin.email, medecin.nom, token
+            )
             email_envoye = True
         except Exception:
             pass
