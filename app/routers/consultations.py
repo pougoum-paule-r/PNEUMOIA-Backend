@@ -12,8 +12,13 @@ from app.models.acces_patient import AccesPatient
 from app.models.diagnostic_ia import DiagnosticIA
 from app.schemas.consultation import (
     ConsultationCreate, ConsultationOut,
-    AntecedentsIn, SymptomesIn, OpinionIn, StatutCliniqueIn,
+    AntecedentsIn, SymptomesIn, OpinionIn,
 )
+from pydantic import BaseModel
+from typing import Literal
+
+class StatutCliniqueIn(BaseModel):
+    statut_clinique: Literal["stable", "surveille", "urgent", "critique"]
 
 router = APIRouter(prefix="/api/v1/consultations", tags=["Consultations"])
 
@@ -120,7 +125,19 @@ async def sauvegarder_opinion(
     db: AsyncSession = Depends(get_db),
     medecin=Depends(get_current_medecin),
 ):
-    c = await get_ma_consultation(consultation_id, medecin.id, db)
+    from sqlalchemy.orm import selectinload
+
+    # Charger la consultation AVEC le diagnostic (évite le lazy-load interdit en async)
+    result = await db.execute(
+        select(Consultation)
+        .where(Consultation.id == consultation_id)
+        .options(selectinload(Consultation.diagnostic))
+    )
+    c = result.scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Consultation introuvable")
+    if c.medecin_id != medecin.id:
+        raise HTTPException(403, "Accès refusé")
 
     # Prescription
     c.prescriptions = {
@@ -140,21 +157,18 @@ async def sauvegarder_opinion(
     # Partage
     c.partage = payload.partage.model_dump()
 
-    # ← RÈGLE MÉTIER : consultation terminée seulement si le médecin a écrit quelque chose
+    # Statut avis médecin
     a_donne_avis = bool(
         payload.observations or payload.medicaments or
         payload.recommandations or payload.conseils_maison
     )
     c.statut = "terminee" if a_donne_avis else "en_attente"
 
-    # Alimenter statut_clinique depuis diagnostic.etat_patient (si pas encore défini)
-    if not c.statut_clinique:
-        diag_result = await db.execute(
-            select(DiagnosticIA).where(DiagnosticIA.consultation_id == consultation_id)
-        )
-        diag = diag_result.scalar_one_or_none()
-        if diag and diag.etat_patient:
-            c.statut_clinique = diag.etat_patient
+    # Statut clinique depuis le diagnostic IA (déjà chargé via selectinload)
+    if c.diagnostic and c.diagnostic.etat_patient:
+        etat = c.diagnostic.etat_patient
+        if etat in ("stable", "surveille", "urgent", "critique"):
+            c.statut_clinique = etat
 
     await db.commit()
 
@@ -205,6 +219,130 @@ async def telecharger_pdf(
     )
 
 
+
+# ── PATCH /consultations/:id/statut-clinique — Changer statut ────
+# Permet au médecin de modifier manuellement le statut clinique
+# (ex: passer urgent → stable après amélioration)
+@router.patch("/{consultation_id}/statut-clinique", status_code=200)
+async def changer_statut_clinique(
+    consultation_id: str,
+    payload: StatutCliniqueIn,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    c = await get_ma_consultation(consultation_id, medecin.id, db)
+    c.statut_clinique = payload.statut_clinique
+    await db.commit()
+    return {
+        "message":         f"Statut clinique mis à jour : {payload.statut_clinique}",
+        "statut_clinique": c.statut_clinique,
+        "consultation_id": consultation_id,
+    }
+
+
+# ── GET /consultations/historique — Historique enrichi ───────────
+# Retourne toutes les consultations du médecin avec patient,
+# diagnostic, feedback, prescription — pour la page Historique
+@router.get("/historique")
+async def historique_consultations(
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from sqlalchemy.orm import selectinload
+    from app.models.feedback_ia import FeedbackIA
+    from app.models.medecin import Medecin
+
+    result = await db.execute(
+        select(Consultation)
+        .where(Consultation.medecin_id == medecin.id)
+        .options(
+            selectinload(Consultation.diagnostic),
+            selectinload(Consultation.patient),
+        )
+        .order_by(Consultation.created_at.desc())
+        .limit(200)
+    )
+    # scalars().unique() évite les doublons dus aux jointures SQLAlchemy
+    consultations = result.scalars().unique().all()
+
+    data = []
+    for c in consultations:
+        # Feedback
+        feedback = None
+        if c.diagnostic:
+            fb = await db.execute(
+                select(FeedbackIA)
+                .where(FeedbackIA.diagnostic_id == c.diagnostic.id)
+                .limit(1)
+            )
+            feedback = fb.scalar_one_or_none()
+
+        # Médecin de la consultation
+        med = await db.get(Medecin, c.medecin_id)
+
+        # Patient (âge calculé)
+        pat = c.patient
+        age = None
+        if pat and pat.date_naissance:
+            from datetime import date
+            today = date.today()
+            age   = today.year - pat.date_naissance.year - (
+                (today.month, today.day) < (pat.date_naissance.month, pat.date_naissance.day)
+            )
+
+        data.append({
+            "id":              c.id,
+            "statut":          c.statut,
+            "statut_clinique": getattr(c, 'statut_clinique', 'stable'),
+            "created_at":      c.created_at.isoformat(),
+            "avis_medecin":    c.avis_medecin,
+            "observations":    c.observations,
+            "recommandations": c.recommandations,
+            "prescriptions":   c.prescriptions or {},
+            "symptomes":       c.symptomes or {},
+            "antecedents_consultation": c.antecedents_consultation or {},
+            "patient": {
+                "id":                  pat.id,
+                "nom":                 pat.nom,
+                "prenom":              pat.prenom,
+                "civilite":            pat.civilite,
+                "age":                 age,
+                "telephone":           pat.telephone,
+                "adresse":             pat.adresse,
+                "religion":            pat.religion,
+                "groupe_sanguin":      pat.groupe_sanguin,
+                "allergies":           pat.allergies or [],
+                "personne_a_contacter": pat.personne_a_contacter,
+            } if pat else None,
+            "medecin": {
+                "id":        med.id,
+                "nom":       med.nom,
+                "prenom":    med.prenom,
+                "specialite": getattr(med, 'specialite', None),
+                "ville":     getattr(med, 'ville', None),
+            } if med else None,
+            "diagnostic": {
+                "id":                  c.diagnostic.id,
+                "maladies":            c.diagnostic.maladies or [],
+                "etat_patient":        c.diagnostic.etat_patient,
+                "version_modele":      c.diagnostic.version_modele,
+                "type_consultation":   getattr(c.diagnostic, 'type_consultation', None),
+                "recommandations":     c.diagnostic.recommandations or [],
+                "examens_recommandes": (
+                    c.diagnostic.maladies[0].get('examens_suggeres', [])
+                    if c.diagnostic.maladies else []
+                ),
+            } if c.diagnostic else None,
+            "feedback": {
+                "concordance":      feedback.concordance,
+                "diagnostic_final": feedback.diagnostic_final,
+                "commentaire":      feedback.commentaire,
+            } if feedback else None,
+            "is_shared": False,  # consultations du médecin lui-même
+        })
+    return data
+
+
 # ── GET /consultations — Liste des consultations ─────────────────
 @router.get("", response_model=list[ConsultationOut])
 async def lister_consultations(
@@ -218,20 +356,6 @@ async def lister_consultations(
         .limit(50)
     )
     return result.scalars().all()
-
-
-# ── PATCH /consultations/:id/statut-clinique — Modifier l'état clinique ──
-@router.patch("/{consultation_id}/statut-clinique", status_code=200)
-async def modifier_statut_clinique(
-    consultation_id: str,
-    payload: StatutCliniqueIn,
-    db: AsyncSession = Depends(get_db),
-    medecin=Depends(get_current_medecin),
-):
-    c = await get_ma_consultation(consultation_id, medecin.id, db)
-    c.statut_clinique = payload.statut_clinique
-    await db.commit()
-    return {"statut_clinique": c.statut_clinique, "consultation_id": consultation_id}
 
 
 # ── GET /consultations/en-attente — Consultations sans avis ──────

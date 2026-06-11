@@ -70,7 +70,7 @@ def send_rejection_email(to_email: str, nom: str, motif: str) -> None:
 
 
 # ─── Email OTP (code de connexion) ───────────────────────────────────────────
-def send_otp_email(to_email: str, nom: str, otp: str) -> None:
+def send_otp_email(to_email: str, nom: str, otp: str) -> None:  # noqa (kept for login flow)
     _send(
         to_email = to_email,
         subject  = "PneumoIA — Votre code de connexion",
@@ -85,6 +85,103 @@ def send_otp_email(to_email: str, nom: str, otp: str) -> None:
           <p style="color:#6b7280;font-size:13px">
             ⏱️ Ce code expire dans <strong>5 minutes</strong>.<br>
             Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.
+          </p>
+        </div>
+        """,
+    )
+
+
+# ─── Email OTP reset de mot de passe ─────────────────────────────────────────
+def send_reset_otp_email(to_email: str, nom: str, otp: str) -> None:
+    _send(
+        to_email = to_email,
+        subject  = "PneumoIA — Code de réinitialisation de mot de passe",
+        html     = f"""
+        <div style="font-family:sans-serif;max-width:500px;margin:auto">
+          <h2 style="color:#d97706">Bonjour Dr {nom},</h2>
+          <p>Vous avez demandé la réinitialisation de votre mot de passe.</p>
+          <p>Votre code à usage unique :</p>
+          <div style="font-size:42px;font-weight:bold;color:#d97706;
+                      letter-spacing:10px;margin:24px 0;text-align:center;
+                      background:#fffbeb;border-radius:12px;padding:16px">
+            {otp}
+          </div>
+          <p style="color:#6b7280;font-size:13px">
+            ⏱️ Ce code expire dans <strong>5 minutes</strong>.<br>
+            ⚠️ Si vous n'êtes <strong>pas</strong> à l'origine de cette demande,
+            ignorez cet email et contactez immédiatement l'administrateur.<br>
+            Vous disposez de <strong>3 tentatives</strong> pour entrer ce code.
+          </p>
+        </div>
+        """,
+    )
+
+
+# ─── Alerte piratage → Admin ──────────────────────────────────────────────────
+def send_piratage_admin_email(
+    admin_email: str, medecin_nom: str, medecin_email: str,
+    medecin_id: str, nb_tentatives: int,
+) -> None:
+    now = datetime.utcnow().strftime("%d/%m/%Y à %H:%M UTC")
+    _send(
+        to_email = admin_email,
+        subject  = "🚨 PneumoIA — Tentative de piratage de compte détectée",
+        html     = f"""
+        <div style="font-family:sans-serif;max-width:500px;margin:auto">
+          <div style="background:#fef2f2;border-left:4px solid #dc2626;padding:16px;border-radius:8px;margin-bottom:16px">
+            <h2 style="color:#dc2626;margin:0 0 8px">⚠️ Alerte de sécurité</h2>
+            <p style="margin:0;color:#7f1d1d">
+              <strong>{nb_tentatives} tentatives incorrectes</strong> de réinitialisation
+              de mot de passe ont été détectées sur un compte médecin.
+            </p>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:14px">
+            <tr><td style="padding:8px;color:#6b7280;width:140px">Médecin</td>
+                <td style="padding:8px;font-weight:bold">Dr. {medecin_nom}</td></tr>
+            <tr style="background:#f9fafb">
+                <td style="padding:8px;color:#6b7280">Email</td>
+                <td style="padding:8px">{medecin_email}</td></tr>
+            <tr><td style="padding:8px;color:#6b7280">Identifiant</td>
+                <td style="padding:8px;font-family:monospace">{medecin_id}</td></tr>
+            <tr style="background:#f9fafb">
+                <td style="padding:8px;color:#6b7280">Date / heure</td>
+                <td style="padding:8px">{now}</td></tr>
+          </table>
+          <p style="color:#6b7280;font-size:13px;margin-top:16px">
+            Vérifiez l'activité du compte et contactez le médecin pour confirmer
+            qu'il est bien à l'origine de cette demande.
+          </p>
+        </div>
+        """,
+    )
+
+
+# ─── Alerte piratage → Médecin ───────────────────────────────────────────────
+def send_piratage_medecin_email(to_email: str, nom: str) -> None:
+    now = datetime.utcnow().strftime("%d/%m/%Y à %H:%M UTC")
+    _send(
+        to_email = to_email,
+        subject  = "🚨 PneumoIA — Activité suspecte sur votre compte",
+        html     = f"""
+        <div style="font-family:sans-serif;max-width:500px;margin:auto">
+          <div style="background:#fef2f2;border-left:4px solid #dc2626;padding:16px;border-radius:8px;margin-bottom:16px">
+            <h2 style="color:#dc2626;margin:0 0 8px">⚠️ Alerte de sécurité</h2>
+            <p style="margin:0;color:#7f1d1d">
+              3 tentatives incorrectes de réinitialisation de mot de passe ont été
+              détectées sur votre compte PneumoIA.
+            </p>
+          </div>
+          <p style="color:#374151">Bonjour Dr {nom},</p>
+          <p style="color:#374151">
+            Le <strong>{now}</strong>, quelqu'un a tenté 3 fois de réinitialiser
+            le mot de passe de votre compte sans succès.
+          </p>
+          <p style="color:#dc2626;font-weight:bold">
+            Si ce n'était PAS vous, votre compte est peut-être en danger.
+            Contactez immédiatement l'administrateur PneumoIA.
+          </p>
+          <p style="color:#9ca3af;font-size:12px;margin-top:16px">
+            L'administrateur a également été notifié de cette activité suspecte.
           </p>
         </div>
         """,

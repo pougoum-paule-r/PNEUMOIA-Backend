@@ -1,8 +1,15 @@
 # app/routers/patients.py
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from datetime import datetime, timezone
+from pydantic import BaseModel
+
+class MotifRefusIn(BaseModel):
+    motif_refus: str | None = None
+
+class AvisIn(BaseModel):
+    contenu: str
 
 from app.database import get_db
 from app.core.security import get_current_medecin
@@ -21,9 +28,7 @@ async def creer_patient(
     db: AsyncSession = Depends(get_db),
     medecin=Depends(get_current_medecin),
 ):
-    # civilite → sexe
     sexe = "M" if payload.civilite == "M" else "F" if payload.civilite == "Mme" else None
-
     patient = Patient(
         nom                  = payload.nom.upper().strip(),
         prenom               = payload.prenom.strip(),
@@ -83,6 +88,218 @@ async def mes_patients(
     return result.scalars().all()
 
 
+# ── GET /patients/recherche-par-code?code=XXX — Fiche partielle ──
+# Endpoint sécurisé : retourne uniquement les données non-sensibles
+# sans nécessiter d'être propriétaire du dossier
+@router.get("/recherche-par-code")
+async def recherche_par_code(
+    code: str,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from app.models.medecin import Medecin
+
+    from app.models.consultation import Consultation
+
+    patient = await db.get(Patient, code.strip().upper())
+    if not patient or patient.deleted_at is not None:
+        raise HTTPException(404, "Patient introuvable avec cet identifiant")
+
+    # Le dossier n'est partageable que si le médecin a soumis son avis
+    avis_check = await db.execute(
+        select(Consultation).where(
+            Consultation.patient_id == patient.id,
+            Consultation.avis_medecin.isnot(None),
+        ).limit(1)
+    )
+    if not avis_check.scalar_one_or_none():
+        raise HTTPException(404, "Patient introuvable avec cet identifiant")
+
+    proprietaire = None
+    if patient.created_by:
+        proprietaire = await db.get(Medecin, patient.created_by)
+
+    age = None
+    if patient.date_naissance:
+        from datetime import date
+        today = date.today()
+        age   = today.year - patient.date_naissance.year - (
+            (today.month, today.day) < (patient.date_naissance.month, patient.date_naissance.day)
+        )
+
+    # Fiche partielle — pas de diagnostic, pas d'antécédents détaillés
+    return {
+        "id":                   patient.id,
+        "nom":                  patient.nom,
+        "prenom":               patient.prenom,
+        "civilite":             patient.civilite,
+        "sexe":                 patient.sexe,
+        "age":                  age,
+        "groupe_sanguin":       patient.groupe_sanguin,
+        "religion":             patient.religion,
+        "telephone_urgence":    patient.telephone_urgence,
+        "personne_a_contacter": patient.personne_a_contacter,
+        "medecin_referent":     f"Dr. {proprietaire.prenom} {proprietaire.nom}" if proprietaire else None,
+    }
+
+
+# ── GET /patients/access-requests/envoyees — Demandes envoyées ───
+@router.get("/access-requests/envoyees")
+async def demandes_envoyees(
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from app.models.medecin import Medecin
+
+    result = await db.execute(
+        select(AccesPatient, Patient)
+        .join(Patient, AccesPatient.patient_id == Patient.id)
+        .where(AccesPatient.medecin_demandeur_id == medecin.id)
+        .order_by(AccesPatient.created_at.desc())
+    )
+    rows = result.all()
+
+    data = []
+    for acces, patient in rows:
+        proprietaire = None
+        if patient.created_by:
+            proprietaire = await db.get(Medecin, patient.created_by)
+
+        data.append({
+            "id":                   acces.id,
+            "patient_id":           patient.id,
+            "patient_nom":          patient.nom,
+            "patient_prenom":       patient.prenom,
+            "statut":               acces.statut,
+            "justificatif":         acces.justificatif_demande,
+            "motif_refus":          acces.motif_refus,
+            "created_at":           acces.created_at.isoformat() if acces.created_at else None,
+            "updated_at":           acces.updated_at.isoformat() if acces.updated_at else None,
+            "medecin_proprietaire": f"Dr. {proprietaire.prenom} {proprietaire.nom}" if proprietaire else None,
+        })
+    return data
+
+
+# ── GET /patients/access-requests/recues — Demandes reçues ───────
+@router.get("/access-requests/recues")
+async def demandes_recues(
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from app.models.medecin import Medecin
+
+    result = await db.execute(
+        select(AccesPatient, Patient)
+        .join(Patient, AccesPatient.patient_id == Patient.id)
+        .where(
+            AccesPatient.medecin_proprietaire_id == medecin.id,
+            AccesPatient.statut == "en_attente",
+        )
+        .order_by(AccesPatient.created_at.desc())
+    )
+    rows = result.all()
+
+    data = []
+    for acces, patient in rows:
+        demandeur = await db.get(Medecin, acces.medecin_demandeur_id)
+        data.append({
+            "id":                    acces.id,
+            "patient_id":            patient.id,
+            "patient_nom":           patient.nom,
+            "patient_prenom":        patient.prenom,
+            "urgent":                False,
+            "created_at":            acces.created_at.isoformat() if acces.created_at else None,
+            "justificatif_demande":  acces.justificatif_demande,
+            "diagnostic":            acces.justificatif_demande,
+            "medecin_nom":           demandeur.nom        if demandeur else None,
+            "medecin_prenom":        demandeur.prenom     if demandeur else None,
+            "medecin_specialite":    getattr(demandeur, 'specialite', None) if demandeur else None,
+            "medecin_hopital":       getattr(demandeur, 'hopital',    None) if demandeur else None,
+            "medecin_ville":         getattr(demandeur, 'ville',      None) if demandeur else None,
+        })
+    return data
+
+
+# ── POST /patients/access-requests/:id/accepter ──────────────────
+@router.post("/access-requests/{demande_id}/accepter", status_code=200)
+async def accepter_demande(
+    demande_id: str,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    acces = await db.get(AccesPatient, demande_id)
+    if not acces:
+        raise HTTPException(404, "Demande introuvable")
+    if acces.medecin_proprietaire_id != medecin.id:
+        raise HTTPException(403, "Accès refusé")
+    acces.statut = "accorde"
+    await db.commit()
+    return {"message": "Accès accordé"}
+
+
+# ── POST /patients/access-requests/:id/refuser ───────────────────
+@router.post("/access-requests/{demande_id}/refuser", status_code=200)
+async def refuser_demande(
+    demande_id: str,
+    body: MotifRefusIn = Body(default=MotifRefusIn()),
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    acces = await db.get(AccesPatient, demande_id)
+    if not acces:
+        raise HTTPException(404, "Demande introuvable")
+    if acces.medecin_proprietaire_id != medecin.id:
+        raise HTTPException(403, "Accès refusé")
+    acces.statut = "refuse"
+    if body.motif_refus:
+        acces.motif_refus = body.motif_refus.strip()
+    acces.updated_at = datetime.utcnow()
+    await db.commit()
+    return {"message": "Demande refusée"}
+
+
+# ── GET /patients/mes-partages — Dossiers partagés ───────────────
+@router.get("/mes-partages")
+async def mes_partages(
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from app.models.medecin import Medecin
+
+    result = await db.execute(
+        select(AccesPatient, Patient)
+        .join(Patient, AccesPatient.patient_id == Patient.id)
+        .where(
+            AccesPatient.medecin_proprietaire_id == medecin.id,
+            AccesPatient.statut == "accorde",
+        )
+        .order_by(Patient.nom)
+    )
+    rows = result.all()
+
+    patients_map = {}
+    for acces, patient in rows:
+        pid = patient.id
+        if pid not in patients_map:
+            patients_map[pid] = {
+                "patient_id":     patient.id,
+                "patient_nom":    patient.nom,
+                "patient_prenom": patient.prenom,
+                "acces": [],
+            }
+        demandeur = await db.get(Medecin, acces.medecin_demandeur_id)
+        if demandeur:
+            patients_map[pid]["acces"].append({
+                "medecin_id": demandeur.id,
+                "nom":        demandeur.nom,
+                "prenom":     demandeur.prenom,
+                "specialite": getattr(demandeur, 'specialite', None),
+                "depuis":     acces.created_at.isoformat() if getattr(acces, 'created_at', None) else None,
+            })
+
+    return list(patients_map.values())
+
+
 # ── DELETE /patients/:id — Soft-delete (corbeille) ───────────────
 @router.delete("/{patient_id}", status_code=204)
 async def supprimer_patient(
@@ -104,7 +321,7 @@ async def supprimer_patient(
     return None
 
 
-# ── GET /patients/corbeille — Patients soft-deletés du médecin ───
+# ── GET /patients/corbeille — Patients soft-deletés ──────────────
 @router.get("/corbeille", response_model=list[PatientOut])
 async def corbeille_patients(
     db: AsyncSession = Depends(get_db),
@@ -119,7 +336,7 @@ async def corbeille_patients(
     return result.scalars().all()
 
 
-# ── PATCH /patients/:id/restaurer — Annuler le soft-delete ───────
+# ── PATCH /patients/:id/restaurer ────────────────────────────────
 @router.patch("/{patient_id}/restaurer", response_model=PatientOut)
 async def restaurer_patient(
     patient_id: str,
@@ -155,7 +372,6 @@ async def consultations_patient(
     if not patient:
         raise HTTPException(404, "Patient introuvable")
 
-    # Accès : propriétaire OU accès accordé
     if patient.created_by != medecin.id:
         acces_result = await db.execute(
             select(AccesPatient).where(
@@ -177,7 +393,6 @@ async def consultations_patient(
 
     data = []
     for c in consultations:
-        # Charger le feedback médecin si existe
         feedback = None
         if c.diagnostic:
             fb_result = await db.execute(
@@ -187,23 +402,25 @@ async def consultations_patient(
             )
             feedback = fb_result.scalar_one_or_none()
 
-        # Charger le médecin qui a fait la consultation
         med_consult = await db.get(Medecin, c.medecin_id) if getattr(c, 'medecin_id', None) else None
-        # Fallback : médecin créateur du patient
         if not med_consult and patient.created_by:
             med_consult = await db.get(Medecin, patient.created_by)
 
+        # Normaliser concordance
+        concordance = None
+        if feedback and feedback.concordance is not None:
+            concordance = feedback.concordance in (True, 'oui', 1)
+
         data.append({
-            "id":               c.id,
-            "statut":           c.statut,
-            "statut_clinique":  c.statut_clinique,
-            "created_at":       c.created_at.isoformat(),
+            "id":              c.id,
+            "statut":          c.statut,
+            "statut_clinique": getattr(c, 'statut_clinique', 'stable'),
+            "created_at":      c.created_at.isoformat(),
             "observations":    c.observations,
             "recommandations": c.recommandations,
             "prescriptions":   c.prescriptions,
             "avis_medecin":    c.avis_medecin,
             "symptomes":       c.symptomes or {},
-            # Médecin ayant effectué la consultation
             "medecin": {
                 "id":         med_consult.id,
                 "nom":        med_consult.nom,
@@ -212,29 +429,28 @@ async def consultations_patient(
                 "ville":      getattr(med_consult, 'ville', None),
             } if med_consult else None,
             "diagnostic": {
-                "id":                  c.diagnostic.id             if c.diagnostic else None,
-                "maladies":            c.diagnostic.maladies       if c.diagnostic else [],
-                "etat_patient":        c.diagnostic.etat_patient   if c.diagnostic else None,
-                # version_modele : 'equipe' si FVC+FEV1 fournis, 'base' sinon
-                "version_modele":      c.diagnostic.version_modele if c.diagnostic else None,
-                "type_consultation":   c.diagnostic.type_consultation if c.diagnostic and hasattr(c.diagnostic, 'type_consultation') else None,
-                "recommandations":     c.diagnostic.recommandations if c.diagnostic else [],
-                "alertes":             c.diagnostic.alertes        if c.diagnostic and hasattr(c.diagnostic, 'alertes') else [],
+                "id":                  c.diagnostic.id,
+                "maladies":            c.diagnostic.maladies or [],
+                "etat_patient":        c.diagnostic.etat_patient,
+                "version_modele":      c.diagnostic.version_modele,
+                "type_consultation":   getattr(c.diagnostic, 'type_consultation', None),
+                "recommandations":     c.diagnostic.recommandations or [],
+                "alertes":             getattr(c.diagnostic, 'alertes', []) or [],
                 "examens_recommandes": (
                     c.diagnostic.maladies[0].get('examens_suggeres', [])
-                    if c.diagnostic and c.diagnostic.maladies else []
+                    if c.diagnostic.maladies else []
                 ),
             } if c.diagnostic else None,
             "feedback": {
-                "concordance":      feedback.concordance      if feedback else None,
-                "diagnostic_final": feedback.diagnostic_final if feedback else None,
-                "commentaire":      feedback.commentaire      if feedback else None,
+                "concordance":      concordance,
+                "diagnostic_final": feedback.diagnostic_final,
+                "commentaire":      feedback.commentaire,
             } if feedback else None,
         })
     return data
 
 
-# ── PATCH /patients/:id — Modifier un patient ─────────────────────
+# ── PATCH /patients/:id — Modifier un patient ────────────────────
 @router.patch("/{patient_id}", response_model=PatientOut)
 async def modifier_patient(
     patient_id: str,
@@ -248,7 +464,6 @@ async def modifier_patient(
     if patient.created_by != medecin.id:
         raise HTTPException(403, "Accès refusé — vous ne pouvez modifier que vos propres patients")
 
-    # Mettre à jour les champs
     patient.nom                  = payload.nom.upper().strip()
     patient.prenom               = payload.prenom.strip()
     patient.civilite             = payload.civilite
@@ -268,24 +483,19 @@ async def modifier_patient(
     return patient
 
 
-# ── GET /patients/:id/acces — Liste des médecins ayant accès ─────
+# ── GET /patients/:id/acces — Médecins ayant accès ───────────────
 @router.get("/{patient_id}/acces")
 async def acces_patient(
     patient_id: str,
     db: AsyncSession = Depends(get_db),
     medecin=Depends(get_current_medecin),
 ):
-    """
-    Retourne la liste des médecins ayant accès au dossier patient.
-    Le propriétaire (created_by) est toujours en premier avec est_proprietaire=True.
-    """
     from app.models.medecin import Medecin
 
     patient = await db.get(Patient, patient_id)
     if not patient:
         raise HTTPException(404, "Patient introuvable")
 
-    # Vérifier que le demandeur a accès (propriétaire ou accès accordé)
     if patient.created_by != medecin.id:
         acces_check = await db.execute(
             select(AccesPatient).where(
@@ -299,23 +509,21 @@ async def acces_patient(
 
     result = []
 
-    # 1. Propriétaire (médecin créateur du patient)
     if patient.created_by:
         proprietaire = await db.get(Medecin, patient.created_by)
         if proprietaire:
             result.append({
-                "medecin_id":      proprietaire.id,
-                "nom":             proprietaire.nom,
-                "prenom":          proprietaire.prenom,
-                "specialite":      getattr(proprietaire, 'specialite', None),
-                "ville":           getattr(proprietaire, 'ville', None),
-                "role":            "proprietaire",
+                "medecin_id":       proprietaire.id,
+                "nom":              proprietaire.nom,
+                "prenom":           proprietaire.prenom,
+                "specialite":       getattr(proprietaire, 'specialite', None),
+                "ville":            getattr(proprietaire, 'ville', None),
+                "role":             "proprietaire",
                 "est_proprietaire": True,
-                "est_moi":         proprietaire.id == medecin.id,
-                "depuis":          patient.created_at.isoformat() if patient.created_at else None,
+                "est_moi":          proprietaire.id == medecin.id,
+                "depuis":           patient.created_at.isoformat() if patient.created_at else None,
             })
 
-    # 2. Médecins avec accès accordé
     acces_accordes = await db.execute(
         select(AccesPatient).where(
             AccesPatient.patient_id == patient_id,
@@ -323,7 +531,6 @@ async def acces_patient(
         )
     )
     for acces in acces_accordes.scalars().all():
-        # Ne pas dupliquer le propriétaire
         if acces.medecin_demandeur_id == patient.created_by:
             continue
         med = await db.get(Medecin, acces.medecin_demandeur_id)
@@ -343,7 +550,7 @@ async def acces_patient(
     return result
 
 
-# ── DELETE /patients/:id/acces/:medecin_id — Révoquer un accès ───
+# ── DELETE /patients/:id/acces/:medecin_id — Révoquer ────────────
 @router.delete("/{patient_id}/acces/{medecin_id}", status_code=204)
 async def revoquer_acces(
     patient_id: str,
@@ -383,13 +590,12 @@ async def get_patient(
     if not patient:
         raise HTTPException(404, "Patient introuvable")
 
-    # Accès : propriétaire OU accès accordé
     if patient.created_by != medecin.id:
         acces = await db.execute(
             select(AccesPatient).where(
-                AccesPatient.patient_id          == patient_id,
+                AccesPatient.patient_id           == patient_id,
                 AccesPatient.medecin_demandeur_id == medecin.id,
-                AccesPatient.statut              == "accorde",
+                AccesPatient.statut               == "accorde",
             )
         )
         if not acces.scalar_one_or_none():
@@ -405,13 +611,32 @@ async def demander_acces(
     db: AsyncSession = Depends(get_db),
     medecin=Depends(get_current_medecin),
 ):
+    from app.models.consultation import Consultation
+
     patient = await db.get(Patient, payload.patient_id)
     if not patient:
         raise HTTPException(404, "Patient introuvable")
     if not patient.created_by:
         raise HTTPException(400, "Ce patient n'a pas de médecin propriétaire")
 
-    # Demande déjà existante ?
+    # Règle 1 : un médecin ne peut pas demander accès à son propre patient
+    if patient.created_by == medecin.id:
+        raise HTTPException(400, "Vous êtes déjà le médecin propriétaire de ce patient")
+
+    # Règle 2 : le médecin propriétaire doit avoir soumis son avis (au moins une consultation avec avis)
+    avis_check = await db.execute(
+        select(Consultation).where(
+            Consultation.patient_id == payload.patient_id,
+            Consultation.avis_medecin.isnot(None),
+        ).limit(1)
+    )
+    if not avis_check.scalar_one_or_none():
+        raise HTTPException(
+            400,
+            "Le médecin propriétaire n'a pas encore rédigé son avis — "
+            "le dossier n'est pas encore partageable"
+        )
+
     existing = await db.execute(
         select(AccesPatient).where(
             AccesPatient.patient_id           == payload.patient_id,
@@ -431,8 +656,100 @@ async def demander_acces(
     db.add(demande)
     await db.commit()
     await db.refresh(demande)
-
-    # TODO: notifier le médecin propriétaire
-    # await creer_notification(patient.created_by, "acces_patient_demande", demande, db)
-
     return demande
+
+
+# ── POST /patients/:id/avis — Laisser un avis collaboratif ────────
+@router.post("/{patient_id}/avis", status_code=201)
+async def laisser_avis(
+    patient_id: str,
+    body: AvisIn,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from app.models.notification import Notification
+
+    patient = await db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient introuvable")
+
+    # Vérifier accès (propriétaire ou accès accordé)
+    if patient.created_by != medecin.id:
+        acces = await db.execute(
+            select(AccesPatient).where(
+                AccesPatient.patient_id           == patient_id,
+                AccesPatient.medecin_demandeur_id == medecin.id,
+                AccesPatient.statut               == "accorde",
+            )
+        )
+        if not acces.scalar_one_or_none():
+            raise HTTPException(403, "Accès refusé")
+
+    # Créer une notification pour le médecin propriétaire
+    if patient.created_by and patient.created_by != medecin.id:
+        notif = Notification(
+            destinataire_id = patient.created_by,
+            type_dest       = "medecin",
+            type_notif      = "avis_confrere",
+            titre           = f"Avis du Dr. {medecin.prenom} {medecin.nom} sur {patient.prenom} {patient.nom}",
+            message         = body.contenu[:500],
+            meta            = {
+                "patient_id":          patient_id,
+                "patient_nom":         f"{patient.prenom} {patient.nom}",
+                "medecin_id":          medecin.id,
+                "medecin_nom":         f"Dr. {medecin.prenom} {medecin.nom}",
+                "medecin_specialite":  getattr(medecin, "specialite", None),
+                "contenu":             body.contenu,
+                "created_at":          datetime.utcnow().isoformat(),
+            },
+        )
+        db.add(notif)
+        await db.commit()
+
+    return {"message": "Avis enregistré", "notifié": patient.created_by != medecin.id}
+
+
+# ── GET /patients/:id/avis — Lister les avis collaboratifs ────────
+@router.get("/{patient_id}/avis")
+async def lister_avis(
+    patient_id: str,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from app.models.notification import Notification
+    from sqlalchemy import cast
+    from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+
+    patient = await db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient introuvable")
+
+    if patient.created_by != medecin.id:
+        acces = await db.execute(
+            select(AccesPatient).where(
+                AccesPatient.patient_id           == patient_id,
+                AccesPatient.medecin_demandeur_id == medecin.id,
+                AccesPatient.statut               == "accorde",
+            )
+        )
+        if not acces.scalar_one_or_none():
+            raise HTTPException(403, "Accès refusé")
+
+    result = await db.execute(
+        select(Notification).where(
+            Notification.type_notif == "avis_confrere",
+            Notification.meta["patient_id"].as_string() == patient_id,
+        ).order_by(Notification.created_at.desc()).limit(50)
+    )
+    notifs = result.scalars().all()
+
+    return [
+        {
+            "id":                 n.id,
+            "medecin_nom":        n.meta.get("medecin_nom"),
+            "medecin_specialite": n.meta.get("medecin_specialite"),
+            "contenu":            n.meta.get("contenu"),
+            "created_at":        n.created_at.isoformat() if n.created_at else None,
+        }
+        for n in notifs
+    ]
