@@ -1,4 +1,4 @@
-import os, shutil, uuid, random, string
+import asyncio, os, shutil, uuid, random, string
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -249,11 +249,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     db.add(otp_entry)
     await db.commit()
 
-    try:
-        send_otp_email(medecin.email, medecin.nom, otp)
-    except Exception as e:
-        print(f"⚠️ Email OTP non envoyé : {e}")
-        raise HTTPException(500, "Erreur lors de l'envoi du code OTP. Réessayez.")
+    asyncio.create_task(send_otp_email(medecin.email, medecin.nom, otp))
 
     return {
         "message":    "Code OTP envoyé à votre email. Valable 5 minutes.",
@@ -491,11 +487,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     db.add(otp_entry)
     await db.commit()
 
-    try:
-        send_reset_otp_email(medecin.email, medecin.nom, otp)
-    except Exception as e:
-        print(f"⚠️ Email reset OTP non envoyé : {e}")
-        raise HTTPException(500, "Erreur lors de l'envoi du code OTP. Réessayez.")
+    asyncio.create_task(send_reset_otp_email(medecin.email, medecin.nom, otp))
 
     return {"message": "Code OTP envoyé à votre email. Valable 5 minutes.", "medecin_id": str(medecin.id)}
 
@@ -541,14 +533,14 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
             admins  = (await db.execute(select(Admin))).scalars().all()
             for admin in admins:
                 try:
-                    send_piratage_admin_email(
+                    await send_piratage_admin_email(
                         admin.email, medecin.nom, medecin.email,
                         medecin.id, otp_entry.fail_count
                     )
                 except Exception as e:
                     print(f"⚠️ Email admin non envoyé : {e}")
             try:
-                send_piratage_medecin_email(medecin.email, medecin.nom)
+                await send_piratage_medecin_email(medecin.email, medecin.nom)
             except Exception as e:
                 print(f"⚠️ Email médecin non envoyé : {e}")
             raise HTTPException(

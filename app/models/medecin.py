@@ -1,7 +1,7 @@
 ﻿import random, string
 from datetime import datetime
 
-from sqlalchemy import Column, String, DateTime, Enum, Text, ForeignKey
+from sqlalchemy import Column, String, Boolean, DateTime, Enum, Text, ForeignKey
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -10,6 +10,11 @@ from app.database import Base
 def generate_pneu_id():
     chiffres = ''.join(random.choices(string.digits, k=7))
     return f"PNEU-{chiffres}"
+
+
+def generate_code_referent():
+    chars = string.ascii_uppercase + string.digits
+    return f"AS-{''.join(random.choices(chars, k=5))}"
 
 
 class Medecin(Base):
@@ -40,6 +45,8 @@ class Medecin(Base):
     valide_le          = Column(DateTime,   nullable=True)
     activation_token   = Column(String(255), nullable=True)
     activation_expires = Column(DateTime,   nullable=True)
+    code_referent       = Column(String(10),  unique=True, nullable=True, default=generate_code_referent)
+    code_referent_actif = Column(Boolean,     nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
 
 
@@ -57,6 +64,7 @@ class Medecin(Base):
     otp_codes          = relationship("OTPCode",          back_populates="medecin",    cascade="all, delete-orphan")
     audit_logs         = relationship("AuditLog",         back_populates="medecin")
     cas_cliniques      = relationship("CasCliniquPublic", back_populates="auteur")
+    aides_soignants    = relationship("AideSoignant",     back_populates="medecin", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Medecin {self.id} — {self.prenom} {self.nom} ({self.statut})>"

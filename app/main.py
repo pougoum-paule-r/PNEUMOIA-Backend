@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.routers import auth, admin, diagnostics, patients, consultations
 from app.routers.medecins    import router_medecins
 from app.routers.communautes import router_communautes
+from app.routers.aides       import router as router_aides
 from app.config import settings
 
 app = FastAPI(title="PneumoIA API", version="1.0.0")
@@ -39,3 +40,4 @@ app.include_router(patients.router)
 app.include_router(consultations.router)
 app.include_router(router_medecins)
 app.include_router(router_communautes)
+app.include_router(router_aides, prefix="/api/v1")

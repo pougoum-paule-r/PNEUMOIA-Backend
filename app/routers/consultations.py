@@ -262,8 +262,18 @@ async def historique_consultations(
         .order_by(Consultation.created_at.desc())
         .limit(200)
     )
-    # scalars().unique() évite les doublons dus aux jointures SQLAlchemy
-    consultations = result.scalars().unique().all()
+    consultations_raw = result.scalars().unique().all()
+
+    # Dédupliquer : pour les consultations en_attente sans diagnostic,
+    # ne garder que la plus récente par patient
+    seen_pending = set()
+    consultations = []
+    for c in consultations_raw:
+        if c.diagnostic is None and c.statut == "en_attente":
+            if c.patient_id in seen_pending:
+                continue  # doublon — ignorer
+            seen_pending.add(c.patient_id)
+        consultations.append(c)
 
     data = []
     for c in consultations:
@@ -343,6 +353,42 @@ async def historique_consultations(
     return data
 
 
+# ── DELETE /consultations/doublons — Nettoyer les doublons en_attente ─
+@router.delete("/doublons", status_code=200)
+async def supprimer_doublons(
+    db: AsyncSession = Depends(get_db),
+    medecin          = Depends(get_current_medecin),
+):
+    from sqlalchemy.orm import selectinload
+    result = await db.execute(
+        select(Consultation)
+        .where(
+            Consultation.medecin_id == medecin.id,
+            Consultation.statut     == "en_attente",
+        )
+        .options(selectinload(Consultation.diagnostic))
+        .order_by(Consultation.patient_id, Consultation.created_at.desc())
+    )
+    all_pending = result.scalars().unique().all()
+
+    # Pour chaque patient, garder la plus récente sans diagnostic, supprimer les autres
+    seen = {}
+    to_delete = []
+    for c in all_pending:
+        if c.diagnostic is not None:
+            continue  # a déjà un diagnostic, ne pas toucher
+        if c.patient_id not in seen:
+            seen[c.patient_id] = c.id  # garder celle-ci
+        else:
+            to_delete.append(c)
+
+    for c in to_delete:
+        await db.delete(c)
+
+    await db.commit()
+    return {"supprimees": len(to_delete), "message": f"{len(to_delete)} consultation(s) en doublon supprimée(s)"}
+
+
 # ── GET /consultations — Liste des consultations ─────────────────
 @router.get("", response_model=list[ConsultationOut])
 async def lister_consultations(
@@ -373,3 +419,49 @@ async def consultations_en_attente(
         .order_by(Consultation.created_at.desc())
     )
     return result.scalars().all()
+
+
+# ── GET /consultations/:id — Charger une consultation existante ───
+# DOIT être en dernier pour ne pas intercepter /historique, /en-attente
+@router.get("/{consultation_id}")
+async def get_consultation(
+    consultation_id: str,
+    db: AsyncSession  = Depends(get_db),
+    medecin           = Depends(get_current_medecin),
+):
+    from sqlalchemy.orm import selectinload
+    result = await db.execute(
+        select(Consultation)
+        .where(Consultation.id == consultation_id)
+        .options(selectinload(Consultation.diagnostic), selectinload(Consultation.patient))
+    )
+    c = result.scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Consultation introuvable")
+    if c.medecin_id != medecin.id:
+        raise HTTPException(403, "Accès refusé")
+
+    patient = c.patient
+    return {
+        "id":                     c.id,
+        "patient_id":             c.patient_id,
+        "statut":                 c.statut,
+        "antecedents":            c.antecedents_consultation or {},
+        "symptomes":              c.symptomes              or {},
+        "has_diagnostic":         c.diagnostic is not None,
+        "patient": {
+            "id":                  patient.id,
+            "civilite":            patient.civilite,
+            "nom":                 patient.nom,
+            "prenom":              patient.prenom,
+            "date_naissance":      str(patient.date_naissance) if patient.date_naissance else None,
+            "telephone":           patient.telephone,
+            "email":               patient.email,
+            "adresse":             patient.adresse,
+            "profession":          patient.profession,
+            "religion":            patient.religion,
+            "groupe_sanguin":      patient.groupe_sanguin,
+            "personne_a_contacter":patient.personne_a_contacter,
+            "telephone_urgence":   patient.telephone_urgence,
+        } if patient else None,
+    }

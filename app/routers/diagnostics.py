@@ -446,8 +446,10 @@ async def predict_and_save(
 ):
     # 1. Vérifier le token
     try:
-        payload    = decode_token(credentials.credentials)
-        medecin_id = payload.get("sub")
+        payload = decode_token(credentials.credentials)
+        role    = payload.get("role", "medecin")
+        # Aide token: sub=aide_id, medecin_id=medecin lié
+        medecin_id = payload.get("medecin_id") if role == "aide_soignant" else payload.get("sub")
     except JWTError:
         raise HTTPException(401, "Token invalide")
 

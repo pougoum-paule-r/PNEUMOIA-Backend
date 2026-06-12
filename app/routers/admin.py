@@ -152,7 +152,7 @@ async def valider_medecin(medecin_id: str, db: AsyncSession = Depends(get_db)):
     email_ok = False
     try:
         print(f"📧  Tentative envoi email → {m.email} (FROM: {settings.FROM_EMAIL})")
-        send_activation_email(m.email, m.nom, token)
+        await send_activation_email(m.email, m.nom, token)
         email_ok = True
         print(f"✅  Email envoyé avec succès → {m.email}")
     except Exception as e:
@@ -192,7 +192,7 @@ async def rejeter_medecin(
 
     # Envoyer email de refus
     try:
-        send_rejection_email(m.email, m.nom, body.motif)
+        await send_rejection_email(m.email, m.nom, body.motif)
     except Exception as e:
         print(f" Email refus non envoyé : {e}")
 
