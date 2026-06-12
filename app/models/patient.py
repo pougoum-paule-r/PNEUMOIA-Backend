@@ -64,3 +64,6 @@ class Patient(Base):
 
     def __repr__(self):
         return f"<Patient {self.id} — {self.civilite} {self.prenom} {self.nom}>"
+    
+        # def __hello__(self):
+        #     return f"Patient {self.id} — {self.civilite} {self.prenom} {self.nom}"
