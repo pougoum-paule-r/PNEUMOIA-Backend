@@ -17,6 +17,7 @@ from app.models.notification     import Notification
 from app.models.audit_log        import AuditLog
 from app.models.cas_clinique_public import CasCliniquPublic
 from app.models.aide_soignant       import AideSoignant
+from app.models.avis_patient       import AvisPatient
 
 __all__ = [
     "Admin",
@@ -37,4 +38,5 @@ __all__ = [
     "AuditLog",
     "CasCliniquPublic",
     "AideSoignant",
+    "AvisPatient",
 ]

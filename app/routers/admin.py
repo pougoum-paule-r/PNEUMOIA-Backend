@@ -1,199 +1,298 @@
-# app/routers/admin.py
-import traceback
-from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
-from pydantic import BaseModel
+from typing import Optional
 
 from app.database import get_db
-from app.models.admin   import Admin
-from app.models.medecin import Medecin
-from app.core.security  import (verify_password, create_access_token,
-                                 generate_activation_token)
-from app.core.dependencies import get_current_admin
-from app.services.email_service import send_activation_email, send_rejection_email
-from app.config import settings
+from app.core.security import get_current_admin, verify_password, create_access_token
+from app.models.admin import Admin
+from app.services.admin_service import AdminService
+from app.schemas.admin import (
+    LoginSchema,
+    ResetRequestSchema,
+    ResetConfirmSchema,
+    RefusRequestSchema,
+)
 
-router = APIRouter(prefix="/admin", tags=["Admin"])
+router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
-# ── Schemas locaux ────────────────────────────────────────────────
-class AdminLoginRequest(BaseModel):
-    email:    str
-    password: str
 
-class RefusRequest(BaseModel):
-    motif: str
+# ── Login ──────────────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────────
-#  GET /api/v1/admin/me  — profil de l'admin connecté
-# ─────────────────────────────────────────────────────────────────
-@router.get("/me")
-async def get_admin_me(
-    admin: Admin = Depends(get_current_admin),
+@router.post("/auth/login")
+async def admin_login(
+    body: LoginSchema,
+    db: AsyncSession = Depends(get_db),
 ):
-    """Retourne le profil de l'administrateur authentifié (JWT Bearer)."""
-    return {
-        "id":    admin.id,
-        "nom":   admin.nom,
-        "email": admin.email,
-    }
-
-
-# ─────────────────────────────────────────────────────────────────
-#  POST /api/v1/admin/login
-# ─────────────────────────────────────────────────────────────────
-@router.post("/login")
-async def admin_login(body: AdminLoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Admin).where(Admin.email == body.email))
-    admin  = result.scalar_one_or_none()
+    admin = result.scalar_one_or_none()
 
     if not admin or not verify_password(body.password, admin.password_hash):
-        raise HTTPException(401, "Identifiants incorrects")
+        raise HTTPException(401, "Email ou mot de passe incorrect.")
 
-    token = create_access_token({"sub": str(admin.id), "role": "admin"})
-    return {"access_token": token, "token_type": "bearer"}
+    if not admin.phone:
+        admin.phone = body.phone
+        await db.commit()
+    elif admin.phone != body.phone:
+        raise HTTPException(401, "Numéro de téléphone incorrect.")
 
+    token = create_access_token({
+        "sub":   str(admin.id),
+        "email": admin.email,
+        "phone": admin.phone,
+        "role":  "admin",
+    })
 
-# ─────────────────────────────────────────────────────────────────
-#  GET /api/v1/admin/demandes  — médecins en attente
-# ─────────────────────────────────────────────────────────────────
-@router.get("/demandes")
-async def get_demandes(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Medecin)
-        .where(Medecin.statut == "en_attente")
-        .order_by(Medecin.created_at.desc())
-    )
-    medecins = result.scalars().all()
-    return [
-        {
-            "id":            str(m.id),
-            "civilite":      m.civilite,
-            "nom":           m.nom,
-            "prenom":        m.prenom,
-            "email":         m.email,
-            "specialite":    m.specialite,
-            "numero_rpps":   m.numero_rpps,
-            "etablissement": m.etablissement,
-            "created_at":    m.created_at.isoformat(),
+    return {
+        "access_token": token,
+        "token_type":   "bearer",
+        "admin": {
+            "id":    admin.id,
+            "email": admin.email,
+            "phone": admin.phone,
         }
-        for m in medecins
-    ]
-
-
-# ─────────────────────────────────────────────────────────────────
-#  GET /api/v1/admin/demandes/{id}  — détail + documents
-# ─────────────────────────────────────────────────────────────────
-@router.get("/demandes/{medecin_id}")
-async def get_demande_detail(medecin_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-    select(Medecin)
-    .options(selectinload(Medecin.documents))
-    .where(Medecin.id == medecin_id)
-    )
-
-    m = result.scalar_one_or_none()
-    if not m:
-        raise HTTPException(404, "Médecin introuvable")
-
-    return {
-        "id":            str(m.id),
-        "civilite":      m.civilite,
-        "nom":           m.nom,
-        "prenom":        m.prenom,
-        "email":         m.email,
-        "specialite":    m.specialite,
-        "numero_rpps":   m.numero_rpps,
-        "etablissement": m.etablissement,
-        "statut":        m.statut,
-        "created_at":    m.created_at.isoformat(),
-        "documents": [
-            {
-                "type":     doc.type_document,
-                "fichier":  doc.nom_fichier,
-                "url":      doc.url_fichier,
-                "taille":   doc.taille_octets,
-            }
-            for doc in m.documents
-        ],
     }
 
 
-# ─────────────────────────────────────────────────────────────────
-#  POST /api/v1/admin/demandes/{id}/valider
-# ─────────────────────────────────────────────────────────────────
-@router.post("/demandes/{medecin_id}/valider")
-async def valider_medecin(medecin_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Medecin).where(Medecin.id == medecin_id)
-    )
-    m = result.scalar_one_or_none()
-    if not m:
-        raise HTTPException(404, "Médecin introuvable")
-    if m.statut != "en_attente":
-        raise HTTPException(400, f"Ce médecin est déjà '{m.statut}'")
+# ── Reset mot de passe ─────────────────────────────────────────────────────────
 
-    # Générer le token d'activation (7 jours)
-    token   = generate_activation_token()
-    expires = datetime.utcnow() + timedelta(days=7)
-
-    m.statut             = "valide"
-    m.activation_token   = token
-    m.activation_expires = expires
-    m.valide_le          = datetime.utcnow()
-
-    await db.commit()
-
-    lien_activation = f"{settings.FRONTEND_URL}/activation?token={token}"
-
-    # Envoyer email avec lien
-    email_ok = False
+@router.post("/auth/reset-request")
+async def reset_request(
+    body: ResetRequestSchema,
+    db: AsyncSession = Depends(get_db),
+):
+    otp = await AdminService.request_password_reset(db, body.email, body.phone)
     try:
-        print(f"  Tentative envoi email → {m.email} (FROM: {settings.FROM_EMAIL})")
-        await send_activation_email(m.email, m.nom, token)
-        email_ok = True
-        print(f"  Email envoyé avec succès → {m.email}")
+        await AdminService.send_otp_sms(otp, body.phone)
     except Exception as e:
-        print(f"  Email ÉCHEC → {m.email}")
-        print(f"    Erreur : {e}")
-        print(f"    Détail : {traceback.format_exc()}")
-
-    return {
-        "message":          f"Dr {m.nom} validé.",
-        "email_envoye":     email_ok,
-        "email_medecin":    m.email,
-        "lien_activation":  lien_activation,
-    }
+        raise HTTPException(503, f"Échec envoi SMS : {str(e)}")
+    return {"message": "Code OTP envoyé par SMS. Valide 10 minutes."}
 
 
-# ─────────────────────────────────────────────────────────────────
-#  POST /api/v1/admin/demandes/{id}/rejeter
-# ─────────────────────────────────────────────────────────────────
+@router.post("/auth/reset-confirm")
+async def reset_confirm(
+    body: ResetConfirmSchema,
+    db: AsyncSession = Depends(get_db),
+):
+    await AdminService.verify_and_update_password(
+        db,
+        email=body.email,
+        otp=body.otp,
+        new_password=body.new_password,
+    )
+    return {"message": "Mot de passe mis à jour avec succès."}
+
+
+# ── Demandes en attente ────────────────────────────────────────────────────────
+
+@router.get("/demandes")
+async def get_demandes(
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Retourne tous les médecins en attente avec :
+    - Toutes les données personnelles
+    - Photo de profil (URL complète)
+    - Tous les documents (URL + métadonnées)
+    """
+    return await AdminService.get_demandes(db)
+
+
+@router.post("/demandes/{medecin_id}/valider")
+async def valider_medecin(
+    medecin_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    return await AdminService.valider_medecin(db, medecin_id, admin.id)
+
+
 @router.post("/demandes/{medecin_id}/rejeter")
 async def rejeter_medecin(
     medecin_id: str,
-    body: RefusRequest,
-    db: AsyncSession = Depends(get_db)
+    body: RefusRequestSchema,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
 ):
-    result = await db.execute(
-        select(Medecin).where(Medecin.id == medecin_id)
+    return await AdminService.rejeter_medecin(db, medecin_id, body.motif)
+
+
+# ── Validées par mois/année ────────────────────────────────────────────────────
+
+@router.get("/demandes/valides")
+async def get_valides(
+    mois:  Optional[int] = None,
+    annee: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Retourne les médecins validés pour un mois et une année donnés.
+    Si mois/annee non fournis, retourne le mois en cours.
+    GET /api/admin/demandes/valides?mois=6&annee=2026
+    """
+    return await AdminService.get_valides(db, mois, annee)
+
+
+# ── Actions sur les médecins ──────────────────────────────────────────────────
+
+@router.post("/medecins/{medecin_id}/suspendre")
+async def suspendre_medecin(
+    medecin_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Suspend un médecin — statut passe à "suspendu"
+    Le médecin ne peut plus se connecter.
+    """
+    return await AdminService.suspendre_medecin(
+        db, medecin_id,
+        raison  = body.get("raison", ""),
+        duree   = body.get("duree",  ""),
+        message = body.get("message",""),
+        admin_id= admin.id,
     )
-    m = result.scalar_one_or_none()
-    if not m:
-        raise HTTPException(404, "Médecin introuvable")
-    if m.statut != "en_attente":
-        raise HTTPException(400, f"Ce médecin est déjà '{m.statut}'")
 
-    m.statut      = "rejete"
-    m.motif_rejet = body.motif
-    await db.commit()
 
-    # Envoyer email de refus
-    try:
-        await send_rejection_email(m.email, m.nom, body.motif)
-    except Exception as e:
-        print(f" Email refus non envoyé : {e}")
+@router.post("/medecins/{medecin_id}/reactiver")
+async def reactiver_medecin(
+    medecin_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Réactive un médecin suspendu — statut repasse à "valide"
+    """
+    return await AdminService.reactiver_medecin(db, medecin_id, admin.id)
 
-    return {"message": f"Dr {m.nom} refusé. Email envoyé."}
+
+@router.delete("/medecins/{medecin_id}")
+async def supprimer_medecin(
+    medecin_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Supprime définitivement un médecin et toutes ses données.
+    Action irréversible.
+    """
+    return await AdminService.supprimer_medecin(db, medecin_id)
+
+
+# ── Inscriptions refusées ─────────────────────────────────────────────────────
+
+@router.get("/demandes/refusees")
+async def get_demandes_refusees(
+    ville: str | None = None,
+    motif: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Retourne les demandes avec statut 'rejete'.
+    Filtres optionnels : ville, motif.
+    """
+    return await AdminService.get_demandes_refusees(db, ville=ville, motif=motif)
+
+
+@router.delete("/demandes/{medecin_id}/refusees")
+async def supprimer_dossier_refuse(
+    medecin_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Supprime définitivement un dossier refusé.
+    """
+    return await AdminService.supprimer_dossier_refuse(db, medecin_id)
+
+
+@router.post("/demandes/{medecin_id}/relancer")
+async def relancer_medecin(
+    medecin_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Envoie un e-mail de relance au médecin refusé.
+    Body: { message: str }
+    Le médecin peut re-soumettre sa demande.
+    """
+    return await AdminService.relancer_medecin(
+        db, medecin_id,
+        message = body.get("message", ""),
+        admin_id = admin.id,
+    )
+
+
+# ── Médecins par statut ────────────────────────────────────────────────────────
+
+@router.get("/demandes/statut/{statut}")
+async def get_demandes_par_statut(
+    statut: str,
+    db: AsyncSession = Depends(get_db),
+    admin: Admin = Depends(get_current_admin),
+):
+    """
+    Retourne les médecins filtrés par statut.
+    Valeurs : en_attente | valide | rejete | suspendu
+    GET /api/admin/demandes/statut/rejete
+    GET /api/admin/demandes/statut/suspendu
+    """
+    if statut not in ("en_attente", "valide", "rejete", "suspendu"):
+        raise HTTPException(400, f"Statut invalide : {statut}")
+    return await AdminService.get_demandes_par_statut(db, statut)
+
+
+# ── Inscriptions refusées ──────────────────────────────────────────────────────
+
+@router.get("/demandes/refusees")
+async def get_demandes_refusees(
+    ville:  Optional[str] = None,
+    motif:  Optional[str] = None,
+    db:     AsyncSession  = Depends(get_db),
+    admin:  Admin         = Depends(get_current_admin),
+):
+    """
+    Retourne les médecins avec statut 'rejete'.
+    Filtres optionnels : ville, motif.
+    GET /api/admin/demandes/refusees?ville=Douala&motif=CNOM invalide
+    """
+    return await AdminService.get_demandes_refusees(db, ville=ville, motif=motif)
+
+
+@router.delete("/demandes/{medecin_id}/refusees")
+async def supprimer_dossier_refuse(
+    medecin_id: str,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Supprime définitivement un dossier refusé.
+    DELETE /api/admin/demandes/{id}/refusees
+    """
+    return await AdminService.supprimer_dossier_refuse(db, medecin_id)
+
+
+@router.post("/demandes/{medecin_id}/relancer")
+async def relancer_medecin(
+    medecin_id: str,
+    body:  dict,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Envoie un e-mail de relance au médecin refusé.
+    POST /api/admin/demandes/{id}/relancer
+    Body: { "message": "..." }
+    """
+    return await AdminService.relancer_medecin(
+        db,
+        medecin_id = medecin_id,
+        message    = body.get("message", ""),
+        admin_id   = admin.id,
+    )

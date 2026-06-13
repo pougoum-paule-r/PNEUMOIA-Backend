@@ -274,6 +274,8 @@ async def historique_consultations(
                 continue  # doublon — ignorer
             seen_pending.add(c.patient_id)
         consultations.append(c)
+    # scalars().unique() évite les doublons dus aux jointures SQLAlchemy
+    consultations = result.scalars().unique().all()
 
     data = []
     for c in consultations:
