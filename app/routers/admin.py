@@ -151,12 +151,12 @@ async def valider_medecin(medecin_id: str, db: AsyncSession = Depends(get_db)):
     # Envoyer email avec lien
     email_ok = False
     try:
-        print(f"📧  Tentative envoi email → {m.email} (FROM: {settings.FROM_EMAIL})")
+        print(f"  Tentative envoi email → {m.email} (FROM: {settings.FROM_EMAIL})")
         await send_activation_email(m.email, m.nom, token)
         email_ok = True
-        print(f"✅  Email envoyé avec succès → {m.email}")
+        print(f"  Email envoyé avec succès → {m.email}")
     except Exception as e:
-        print(f"❌  Email ÉCHEC → {m.email}")
+        print(f"  Email ÉCHEC → {m.email}")
         print(f"    Erreur : {e}")
         print(f"    Détail : {traceback.format_exc()}")
 
