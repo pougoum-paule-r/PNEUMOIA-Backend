@@ -3,8 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from datetime import datetime, timezone
-from typing import Optional
 from pydantic import BaseModel
+
+class MotifRefusIn(BaseModel):
+    motif_refus: str | None = None
+
+class AvisIn(BaseModel):
+    contenu: str
 
 from app.database import get_db
 from app.core.security import get_current_medecin
@@ -804,6 +809,7 @@ async def demander_acces(
     return demande
 
 
+<<<<<<< HEAD
     return demande
 
 
@@ -862,10 +868,75 @@ async def get_avis(
 ):
     from app.models.avis_patient import AvisPatient
     from app.models.medecin import Medecin
+=======
+# ── POST /patients/:id/avis — Laisser un avis collaboratif ────────
+@router.post("/{patient_id}/avis", status_code=201)
+async def laisser_avis(
+    patient_id: str,
+    body: AvisIn,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from app.models.notification import Notification
+>>>>>>> origin/BackendMedecin
 
     patient = await db.get(Patient, patient_id)
     if not patient:
         raise HTTPException(404, "Patient introuvable")
+<<<<<<< HEAD
+=======
+
+    # Vérifier accès (propriétaire ou accès accordé)
+    if patient.created_by != medecin.id:
+        acces = await db.execute(
+            select(AccesPatient).where(
+                AccesPatient.patient_id           == patient_id,
+                AccesPatient.medecin_demandeur_id == medecin.id,
+                AccesPatient.statut               == "accorde",
+            )
+        )
+        if not acces.scalar_one_or_none():
+            raise HTTPException(403, "Accès refusé")
+
+    # Créer une notification pour le médecin propriétaire
+    if patient.created_by and patient.created_by != medecin.id:
+        notif = Notification(
+            destinataire_id = patient.created_by,
+            type_dest       = "medecin",
+            type_notif      = "avis_confrere",
+            titre           = f"Avis du Dr. {medecin.prenom} {medecin.nom} sur {patient.prenom} {patient.nom}",
+            message         = body.contenu[:500],
+            meta            = {
+                "patient_id":          patient_id,
+                "patient_nom":         f"{patient.prenom} {patient.nom}",
+                "medecin_id":          medecin.id,
+                "medecin_nom":         f"Dr. {medecin.prenom} {medecin.nom}",
+                "medecin_specialite":  getattr(medecin, "specialite", None),
+                "contenu":             body.contenu,
+                "created_at":          datetime.utcnow().isoformat(),
+            },
+        )
+        db.add(notif)
+        await db.commit()
+
+    return {"message": "Avis enregistré", "notifié": patient.created_by != medecin.id}
+
+
+# ── GET /patients/:id/avis — Lister les avis collaboratifs ────────
+@router.get("/{patient_id}/avis")
+async def lister_avis(
+    patient_id: str,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from app.models.notification import Notification
+    from sqlalchemy import cast
+    from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+
+    patient = await db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient introuvable")
+>>>>>>> origin/BackendMedecin
     if patient.created_by != medecin.id:
         acces = await db.execute(
             select(AccesPatient).where(
@@ -878,6 +949,7 @@ async def get_avis(
             raise HTTPException(403, "Accès refusé")
 
     result = await db.execute(
+<<<<<<< HEAD
         select(AvisPatient)
         .where(AvisPatient.patient_id == patient_id)
         .order_by(AvisPatient.created_at.desc())
@@ -941,3 +1013,22 @@ async def soumettre_avis(
         "contenu":          avis.contenu,
         "created_at":       avis.created_at.isoformat(),
     }
+=======
+        select(Notification).where(
+            Notification.type_notif == "avis_confrere",
+            Notification.meta["patient_id"].as_string() == patient_id,
+        ).order_by(Notification.created_at.desc()).limit(50)
+    )
+    notifs = result.scalars().all()
+
+    return [
+        {
+            "id":                 n.id,
+            "medecin_nom":        n.meta.get("medecin_nom"),
+            "medecin_specialite": n.meta.get("medecin_specialite"),
+            "contenu":            n.meta.get("contenu"),
+            "created_at":        n.created_at.isoformat() if n.created_at else None,
+        }
+        for n in notifs
+    ]
+>>>>>>> origin/BackendMedecin

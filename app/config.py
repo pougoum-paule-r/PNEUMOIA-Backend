@@ -35,7 +35,6 @@ class Settings(BaseSettings):
     ADMIN_PHONE: str | None = None
 
     class Config:
-        env_file = str(ENV_FILE)
-        extra = "ignore"
+        env_file = ".env"
 
 settings = Settings()

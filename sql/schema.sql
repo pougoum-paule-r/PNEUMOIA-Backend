@@ -301,6 +301,27 @@ CREATE TABLE cas_cliniques_publics (
     created_at           TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE ressources_medicales (
+    id                VARCHAR(15)  PRIMARY KEY,
+    medecin_id        VARCHAR(15)  NOT NULL REFERENCES medecins(id) ON DELETE CASCADE,
+    titre             VARCHAR(300) NOT NULL,
+    resume            TEXT         NOT NULL,
+    contenu           TEXT,
+    pdf_url           VARCHAR(500),
+    pathologie        VARCHAR(100),
+    tags              JSONB        NOT NULL DEFAULT '[]',
+    niveau            VARCHAR(50)  DEFAULT '3ème année',
+    nb_telechargements INTEGER     NOT NULL DEFAULT 0,
+    nb_vues           INTEGER      NOT NULL DEFAULT 0,
+    publie            BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_at        TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMP
+);
+
+CREATE INDEX idx_ressources_medecin    ON ressources_medicales(medecin_id);
+CREATE INDEX idx_ressources_pathologie ON ressources_medicales(pathologie);
+CREATE INDEX idx_ressources_publie     ON ressources_medicales(publie);
+
 -- ============================================================
 --  INDEXES
 -- ============================================================

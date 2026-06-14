@@ -19,6 +19,10 @@
     "AGE",
     "Gender",
     "smoke",
+    "FVC",
+    "FEC1",
+    "FEV1_FVC_Ratio",
+    "Peak_Flow",
     "PEFR",
     "O2",
     "Scan",
@@ -42,6 +46,18 @@
     "Other diseaes",
     "Peak_Flow"
   ],
-  "precision_base": 53.2,
-  "precision_equipe": 96.8
+  "precision_base": 91.2,
+  "f1_base": 91.2,
+  "recall_base": 91.2,
+  "precision_score_base": 91.9,
+  "cv_f1_base": 90.8,
+  "overfit_risk_base": "medium",
+  "overfit_gap_base": 7.8,
+  "precision_equipe": 95.8,
+  "f1_equipe": 95.7,
+  "recall_equipe": 95.8,
+  "precision_score_equipe": 95.9,
+  "cv_f1_equipe": 94.4,
+  "overfit_risk_equipe": "low",
+  "overfit_gap_equipe": 3.9
 }

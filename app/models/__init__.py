@@ -16,9 +16,14 @@ from app.models.otp              import OTPCode
 from app.models.notification     import Notification
 from app.models.audit_log        import AuditLog
 from app.models.cas_clinique_public import CasCliniquPublic
+<<<<<<< HEAD
 from app.models.question_medecin import QuestionMedecin
 from app.models.faq_publiee      import FAQPubliee
+=======
+from app.models.aide_soignant       import AideSoignant
+>>>>>>> origin/BackendMedecin
 from app.models.avis_patient       import AvisPatient
+from app.models.ressource import RessourceMedicale
 
 __all__ = [
     "Admin",
@@ -40,5 +45,7 @@ __all__ = [
     "CasCliniquPublic",
     "QuestionMedecin",
     "FAQPubliee"
+    "AideSoignant",
     "AvisPatient",
+    "RessourceMedicale",
 ]

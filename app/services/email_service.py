@@ -1,13 +1,17 @@
+import asyncio
+import logging
 import smtplib
 from email.mime.text        import MIMEText
 from email.mime.multipart   import MIMEMultipart
 from datetime               import datetime, timedelta
 from app.config             import settings
 
+logger = logging.getLogger(__name__)
 
-# ─── Expédition SMTP générique (Brevo / SendGrid / Mailtrap) ─────────────────
+
+# ─── Expédition SMTP générique — synchrone (appelé via to_thread) ────────────
 def _send(to_email: str, subject: str, html: str) -> None:
-    """Envoie un email HTML via SMTP (Brevo par défaut)."""
+    """Envoie un email HTML via SMTP. Fonction bloquante — ne pas appeler directement."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = settings.FROM_EMAIL
@@ -21,12 +25,17 @@ def _send(to_email: str, subject: str, html: str) -> None:
         server.sendmail(settings.FROM_EMAIL, to_email, msg.as_string())
 
 
+async def _send_async(to_email: str, subject: str, html: str) -> None:
+    """Wrapper non-bloquant — exécute _send dans un thread pool."""
+    await asyncio.to_thread(_send, to_email, subject, html)
+
+
 # ─── Email de validation du compte ───────────────────────────────────────────
-def send_activation_email(to_email: str, nom: str, token: str) -> None:
+async def send_activation_email(to_email: str, nom: str, token: str) -> None:
     lien   = f"{settings.FRONTEND_URL}/activation?token={token}"
     expiry = (datetime.utcnow() + timedelta(days=7)).strftime("%d/%m/%Y")
 
-    _send(
+    await _send_async(
         to_email = to_email,
         subject  = "PneumoIA — Votre compte a été validé ✅",
         html     = f"""
@@ -50,8 +59,8 @@ def send_activation_email(to_email: str, nom: str, token: str) -> None:
 
 
 # ─── Email de rejet du dossier ───────────────────────────────────────────────
-def send_rejection_email(to_email: str, nom: str, motif: str) -> None:
-    _send(
+async def send_rejection_email(to_email: str, nom: str, motif: str) -> None:
+    await _send_async(
         to_email = to_email,
         subject  = "PneumoIA — Demande d'inscription refusée",
         html     = f"""
@@ -70,8 +79,8 @@ def send_rejection_email(to_email: str, nom: str, motif: str) -> None:
 
 
 # ─── Email OTP (code de connexion) ───────────────────────────────────────────
-def send_otp_email(to_email: str, nom: str, otp: str) -> None:  # noqa (kept for login flow)
-    _send(
+async def send_otp_email(to_email: str, nom: str, otp: str) -> None:
+    await _send_async(
         to_email = to_email,
         subject  = "PneumoIA — Votre code de connexion",
         html     = f"""
@@ -92,8 +101,8 @@ def send_otp_email(to_email: str, nom: str, otp: str) -> None:  # noqa (kept for
 
 
 # ─── Email OTP reset de mot de passe ─────────────────────────────────────────
-def send_reset_otp_email(to_email: str, nom: str, otp: str) -> None:
-    _send(
+async def send_reset_otp_email(to_email: str, nom: str, otp: str) -> None:
+    await _send_async(
         to_email = to_email,
         subject  = "PneumoIA — Code de réinitialisation de mot de passe",
         html     = f"""
@@ -118,12 +127,12 @@ def send_reset_otp_email(to_email: str, nom: str, otp: str) -> None:
 
 
 # ─── Alerte piratage → Admin ──────────────────────────────────────────────────
-def send_piratage_admin_email(
+async def send_piratage_admin_email(
     admin_email: str, medecin_nom: str, medecin_email: str,
     medecin_id: str, nb_tentatives: int,
 ) -> None:
     now = datetime.utcnow().strftime("%d/%m/%Y à %H:%M UTC")
-    _send(
+    await _send_async(
         to_email = admin_email,
         subject  = "🚨 PneumoIA — Tentative de piratage de compte détectée",
         html     = f"""
@@ -157,9 +166,9 @@ def send_piratage_admin_email(
 
 
 # ─── Alerte piratage → Médecin ───────────────────────────────────────────────
-def send_piratage_medecin_email(to_email: str, nom: str) -> None:
+async def send_piratage_medecin_email(to_email: str, nom: str) -> None:
     now = datetime.utcnow().strftime("%d/%m/%Y à %H:%M UTC")
-    _send(
+    await _send_async(
         to_email = to_email,
         subject  = "🚨 PneumoIA — Activité suspecte sur votre compte",
         html     = f"""

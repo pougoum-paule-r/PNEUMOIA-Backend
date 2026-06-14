@@ -1,4 +1,4 @@
-import os, shutil, uuid, random, string
+import asyncio, os, shutil, uuid, random, string
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -273,11 +273,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     db.add(otp_entry)
     await db.commit()
 
-    try:
-        send_otp_email(medecin.email, medecin.nom, otp)
-    except Exception as e:
-        print(f"⚠️ Email OTP non envoyé : {e}")
-        raise HTTPException(500, "Erreur lors de l'envoi du code OTP. Réessayez.")
+    asyncio.create_task(send_otp_email(medecin.email, medecin.nom, otp))
 
     return {
         "message":    "Code OTP envoyé à votre email. Valable 5 minutes.",
@@ -380,7 +376,7 @@ async def update_photo(
     dossier_medecin.mkdir(parents=True, exist_ok=True)
 
     ext_photo    = Path(photo.filename).suffix.lower() or ".jpg"
-    nom_photo    = f"photo_profil{ext_photo}"
+    nom_photo    = f"photo_profil_{uuid.uuid4().hex[:8]}{ext_photo}"
     chemin_photo = dossier_medecin / nom_photo
 
     # 4. Sauvegarder sur le disque
@@ -396,9 +392,39 @@ async def update_photo(
 
 
 # ─────────────────────────────────────────────────────────────
+#  PATCH /api/v1/auth/change-password — changement de mot de passe
+# ─────────────────────────────────────────────────────────────
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password:     str
+
+@router.patch("/change-password")
+async def change_password(
+    body:    ChangePasswordRequest,
+    medecin: Medecin      = Depends(get_current_medecin),
+    db:      AsyncSession = Depends(get_db),
+):
+    """Permet à un médecin authentifié de changer son propre mot de passe."""
+    if not verify_password(body.current_password, medecin.password_hash):
+        raise HTTPException(status_code=400, detail="Mot de passe actuel incorrect")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Le nouveau mot de passe doit contenir au moins 8 caractères")
+    import re
+    if not re.search(r'[A-Z]', body.new_password) or \
+       not re.search(r'[a-z]', body.new_password) or \
+       not re.search(r'[0-9]', body.new_password):
+        raise HTTPException(status_code=400, detail="Doit contenir majuscule, minuscule et chiffre")
+    medecin.password_hash = hash_password(body.new_password)
+    await db.commit()
+    return {"message": "Mot de passe mis à jour avec succès"}
+
+
+# ─────────────────────────────────────────────────────────────
 #  PATCH /api/v1/auth/profil  — mise à jour des infos du profil
 # ─────────────────────────────────────────────────────────────
 class ProfilUpdateRequest(BaseModel):
+    nom:           str | None = None
+    prenom:        str | None = None
     civilite:      str | None = None
     etablissement: str | None = None
     telephone:     str | None = None
@@ -414,6 +440,8 @@ async def update_profil(
     db:      AsyncSession = Depends(get_db),
 ):
     """Met à jour les champs modifiables par le médecin lui-même."""
+    if data.nom           is not None: medecin.nom           = data.nom
+    if data.prenom        is not None: medecin.prenom        = data.prenom
     if data.civilite      is not None: medecin.civilite      = data.civilite
     if data.etablissement is not None: medecin.etablissement = data.etablissement
     if data.telephone     is not None: medecin.telephone     = data.telephone
@@ -515,11 +543,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     db.add(otp_entry)
     await db.commit()
 
-    try:
-        send_reset_otp_email(medecin.email, medecin.nom, otp)
-    except Exception as e:
-        print(f"⚠️ Email reset OTP non envoyé : {e}")
-        raise HTTPException(500, "Erreur lors de l'envoi du code OTP. Réessayez.")
+    asyncio.create_task(send_reset_otp_email(medecin.email, medecin.nom, otp))
 
     return {"message": "Code OTP envoyé à votre email. Valable 5 minutes.", "medecin_id": str(medecin.id)}
 
@@ -565,14 +589,14 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
             admins  = (await db.execute(select(Admin))).scalars().all()
             for admin in admins:
                 try:
-                    send_piratage_admin_email(
+                    await send_piratage_admin_email(
                         admin.email, medecin.nom, medecin.email,
                         medecin.id, otp_entry.fail_count
                     )
                 except Exception as e:
                     print(f"⚠️ Email admin non envoyé : {e}")
             try:
-                send_piratage_medecin_email(medecin.email, medecin.nom)
+                await send_piratage_medecin_email(medecin.email, medecin.nom)
             except Exception as e:
                 print(f"⚠️ Email médecin non envoyé : {e}")
             raise HTTPException(

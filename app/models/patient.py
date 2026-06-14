@@ -49,7 +49,8 @@ class Patient(Base):
     # }
 
     # ── Méta ─────────────────────────────────────────────────────
-    created_by = Column(String(15), ForeignKey("medecins.id", ondelete="SET NULL"), nullable=True)
+    created_by = Column(String(15), ForeignKey("medecins.id",       ondelete="SET NULL"), nullable=True)
+    aide_id    = Column(String(15), ForeignKey("aides_soignants.id",ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime,   nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime,   nullable=True,  onupdate=datetime.utcnow)
 
