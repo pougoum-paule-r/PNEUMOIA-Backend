@@ -1,6 +1,7 @@
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.exc import OperationalError, DisconnectionError
 from app.config import settings
 
 DATABASE_URL = settings.DATABASE_URL.replace(
@@ -10,11 +11,12 @@ DATABASE_URL = settings.DATABASE_URL.replace(
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=5,        # connexions persistantes
-    max_overflow=10,    # connexions supplémentaires max (total 15)
-    pool_timeout=30,    # secondes d'attente avant TimeoutError
-    pool_recycle=1800,  # recycler après 30 min (évite les connexions mortes)
-    pool_pre_ping=True, # tester la connexion avant usage
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+    pool_recycle=300,        # Recycle toutes les 5 min (évite connexions stales)
+    pool_pre_ping=True,
+    pool_use_lifo=True,      # Préfère les connexions récentes (plus chaudes)
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -23,4 +25,11 @@ class Base(DeclarativeBase):
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
-        yield session
+        try:
+            yield session
+        except (OperationalError, DisconnectionError):
+            await session.rollback()
+            raise
+        except Exception:
+            await session.rollback()
+            raise

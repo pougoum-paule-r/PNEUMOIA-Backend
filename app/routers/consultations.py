@@ -75,6 +75,142 @@ async def creer_consultation(
     return c
 
 
+# ── GET /consultations/search?q=terme — Recherche consultations ─
+@router.get("/search")
+async def rechercher_consultations(
+    q: str,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from sqlalchemy.orm import selectinload
+    from sqlalchemy import or_, cast, String
+    from app.models.diagnostic_ia import DiagnosticIA
+
+    terme = f"%{q.strip()}%"
+    result = await db.execute(
+        select(Consultation)
+        .join(Patient, Consultation.patient_id == Patient.id)
+        .outerjoin(DiagnosticIA, DiagnosticIA.consultation_id == Consultation.id)
+        .where(Consultation.medecin_id == medecin.id)
+        .where(
+            or_(
+                Patient.nom.ilike(terme),
+                Patient.prenom.ilike(terme),
+                cast(DiagnosticIA.maladies, String).ilike(terme),
+            )
+        )
+        .options(
+            selectinload(Consultation.patient),
+            selectinload(Consultation.diagnostic),
+        )
+        .order_by(Consultation.created_at.desc())
+        .limit(30)
+    )
+    consultations = result.scalars().unique().all()
+
+    from datetime import date as _date
+    data = []
+    for c in consultations:
+        pat = c.patient
+        diag = c.diagnostic
+        age = None
+        if pat and pat.date_naissance:
+            today = _date.today()
+            age = today.year - pat.date_naissance.year - (
+                (today.month, today.day) < (pat.date_naissance.month, pat.date_naissance.day)
+            )
+        principale = (diag.maladies or [])[0] if diag and diag.maladies else None
+        data.append({
+            "id":         c.id,
+            "patient_id": c.patient_id,
+            "patient":    f"{pat.prenom} {pat.nom}" if pat else "—",
+            "age":        age,
+            "pathology":  principale.get("nom") if principale else "—",
+            "status":     c.statut,
+            "date":       c.created_at.strftime("%Y-%m-%d") if c.created_at else None,
+            "time":       c.created_at.strftime("%H:%M") if c.created_at else None,
+            "doctor":     f"Dr. {medecin.prenom} {medecin.nom}",
+        })
+    return data
+
+
+# ── GET /consultations/cas-graves — Cas urgents / critiques ─────
+@router.get("/cas-graves")
+async def cas_graves(
+    db:      AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from sqlalchemy.orm import selectinload
+    from datetime import date
+
+    result = await db.execute(
+        select(Consultation)
+        .options(
+            selectinload(Consultation.patient),
+            selectinload(Consultation.diagnostic),
+        )
+        .where(Consultation.medecin_id == medecin.id)
+        .order_by(Consultation.created_at.desc())
+    )
+    all_c = result.scalars().all()
+
+    graves = [
+        c for c in all_c
+        if c.statut_clinique in ("urgent", "critique")
+        or (c.diagnostic and c.diagnostic.etat_patient in ("urgent", "critique"))
+    ]
+
+    data = []
+    for c in graves:
+        p    = c.patient
+        diag = c.diagnostic
+        symp = c.symptomes or {}
+
+        age = None
+        if p and p.date_naissance:
+            today = date.today()
+            age   = today.year - p.date_naissance.year - (
+                (today.month, today.day) < (p.date_naissance.month, p.date_naissance.day)
+            )
+
+        # Pathologie principale (premier résultat IA)
+        maladies = diag.maladies if diag else []
+        principale = maladies[0] if maladies else None
+
+        data.append({
+            "consultation_id":       c.id,
+            "patient_id":            p.id       if p else None,
+            "patient_nom":           p.nom      if p else "—",
+            "patient_prenom":        p.prenom   if p else "—",
+            "patient_age":           age,
+            "patient_sexe":          p.sexe     if p else None,
+            "patient_groupe_sanguin": p.groupe_sanguin if p else None,
+            "statut_clinique":       c.statut_clinique,
+            "statut":                c.statut,
+            "diagnostic": {
+                "pathologie":  principale.get("nom") if principale else None,
+                "confidence":  principale.get("pct") if principale else None,
+                "etat_patient": diag.etat_patient if diag else None,
+                "maladies":    maladies[:3],
+            } if diag else None,
+            "signes_vitaux": {
+                "temperature":           symp.get("temperature") or symp.get("fievre_temperature"),
+                "saturation_o2":         symp.get("saturation_o2"),
+                "frequence_cardiaque":   symp.get("frequence_cardiaque"),
+                "frequence_respiratoire": symp.get("frequence_respiratoire"),
+                "tension_systolique":    symp.get("tension_systolique"),
+                "tension_diastolique":   symp.get("tension_diastolique"),
+            },
+            "motif":          symp.get("motif"),
+            "hospitalisation": (c.prescriptions or {}).get("hospitalisation", False),
+            "suivi":          (c.prescriptions or {}).get("suivi"),
+            "created_at":     c.created_at.isoformat() if c.created_at else None,
+            "updated_at":     c.updated_at.isoformat() if c.updated_at else None,
+        })
+
+    return data
+
+
 # ── PATCH /consultations/:id/antecedents — Étape 2 ───────────────
 @router.patch("/{consultation_id}/antecedents", status_code=200)
 async def sauvegarder_antecedents(
@@ -262,19 +398,6 @@ async def historique_consultations(
         .order_by(Consultation.created_at.desc())
         .limit(200)
     )
-    consultations_raw = result.scalars().unique().all()
-
-    # Dédupliquer : pour les consultations en_attente sans diagnostic,
-    # ne garder que la plus récente par patient
-    seen_pending = set()
-    consultations = []
-    for c in consultations_raw:
-        if c.diagnostic is None and c.statut == "en_attente":
-            if c.patient_id in seen_pending:
-                continue  # doublon — ignorer
-            seen_pending.add(c.patient_id)
-        consultations.append(c)
-    # scalars().unique() évite les doublons dus aux jointures SQLAlchemy
     consultations = result.scalars().unique().all()
 
     data = []

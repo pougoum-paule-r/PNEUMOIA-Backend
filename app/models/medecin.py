@@ -68,3 +68,6 @@ class Medecin(Base):
 
     def __repr__(self):
         return f"<Medecin {self.id} — {self.prenom} {self.nom} ({self.statut})>"
+    
+
+    ressources = relationship("RessourceMedicale", back_populates="medecin", cascade="all, delete-orphan")
