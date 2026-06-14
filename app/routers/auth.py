@@ -11,6 +11,8 @@ from app.database import get_db
 from app.models.medecin          import Medecin
 from app.models.document_medecin import DocumentMedecin
 from app.models.otp              import OTPCode
+from app.models.admin            import Admin
+from app.models.notification     import Notification
 from app.schemas.auth            import (LoginRequest, OTPVerifyRequest,
                                           TokenResponse, MessageResponse)
 from app.core.security           import (hash_password, verify_password,
@@ -18,7 +20,6 @@ from app.core.security           import (hash_password, verify_password,
                                           generate_activation_token,
                                           generate_otp)
 from app.core.security import get_current_medecin, decode_token
-from app.models.admin  import Admin
 from sqlalchemy        import update as sa_update
 from jose              import JWTError
 from app.services.email_service  import (
@@ -201,12 +202,35 @@ async def register(
     # ── 6. Commit tout en BD ───────────────────────────────────
     await db.commit()
 
-    # ── 7. SMS à l'admin ───────────────────────────────────────
-    try:
-        await notify_admin_new_medecin(nom, prenom, specialite, settings.ADMIN_PHONE)
-        print(f"✅ SMS envoyé à {settings.ADMIN_PHONE}")
-    except Exception as e:
-        print(f"❌ SMS non envoyé — Erreur Twilio : {e}")
+    # ── 7. Notifier l'admin (SMS + notification in-app) ───────
+    admin_result = await db.execute(select(Admin).limit(1))
+    admin = admin_result.scalar_one_or_none()
+
+    # 7a. Notification in-app persistée en BDD
+    notif = Notification(
+        destinataire_id=str(admin.id) if admin else "admin",
+        type_dest="admin",
+        type_notif="nouvelle_inscription_medecin",
+        titre=f"Nouvelle demande d'accès — Dr {prenom} {nom}",
+        message=(
+            f"Dr {prenom} {nom} ({specialite}) a soumis une demande d'accès "
+            f"à la plateforme. Identifiant : {medecin.id}."
+        ),
+        meta={"medecin_id": medecin.id, "lien": f"/admin/demandes/{medecin.id}"},
+    )
+    db.add(notif)
+    await db.commit()
+
+    # 7b. SMS Twilio — téléphone admin depuis BDD, sinon depuis .env
+    phone_admin = (admin.phone if admin and admin.phone else None) or settings.ADMIN_PHONE
+    if phone_admin:
+        try:
+            await notify_admin_new_medecin(nom, prenom, specialite, phone_admin)
+            print(f"✅ SMS envoyé à {phone_admin}")
+        except Exception as e:
+            print(f"❌ SMS non envoyé — Erreur Twilio : {e}")
+    else:
+        print("⚠️ Aucun numéro admin configuré — SMS ignoré")
 
     return {
         "message": (

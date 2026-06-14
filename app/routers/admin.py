@@ -18,12 +18,13 @@ Organisation :
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, desc
 from typing import Optional
 
 from app.database import get_db
 from app.core.security import get_current_admin, verify_password, create_access_token
 from app.models.admin import Admin
+from app.models.notification import Notification
 from app.services.admin_service import AdminService
 from app.schemas.admin import (
     LoginSchema,
@@ -561,3 +562,102 @@ async def update_parametres(
     Body: { tous les paramètres }
     """
     return await AdminService.update_parametres(db, body, admin.id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 13. NOTIFICATIONS ADMIN
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/notifications")
+async def get_notifications(
+    non_lues_seulement: bool = False,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Retourne les notifications de l'admin (nouvelles inscriptions médecins, etc.).
+    Paramètre optionnel : ?non_lues_seulement=true pour filtrer les non lues.
+    GET /api/admin/notifications
+    """
+    query = (
+        select(Notification)
+        .where(
+            Notification.destinataire_id == str(admin.id),
+            Notification.type_dest == "admin",
+        )
+        .order_by(desc(Notification.created_at))
+        .limit(100)
+    )
+    if non_lues_seulement:
+        query = query.where(Notification.lu == False)
+
+    result = await db.execute(query)
+    notifs = result.scalars().all()
+
+    non_lues = sum(1 for n in notifs if not n.lu)
+
+    return {
+        "total": len(notifs),
+        "non_lues": non_lues,
+        "notifications": [
+            {
+                "id":         n.id,
+                "type":       n.type_notif,
+                "titre":      n.titre,
+                "message":    n.message,
+                "meta":       n.meta,
+                "lu":         n.lu,
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+            }
+            for n in notifs
+        ],
+    }
+
+
+@router.patch("/notifications/{notif_id}/lu")
+async def marquer_notification_lue(
+    notif_id: str,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Marque une notification comme lue.
+    PATCH /api/admin/notifications/{id}/lu
+    """
+    result = await db.execute(
+        select(Notification).where(
+            Notification.id == notif_id,
+            Notification.destinataire_id == str(admin.id),
+            Notification.type_dest == "admin",
+        )
+    )
+    notif = result.scalar_one_or_none()
+    if not notif:
+        raise HTTPException(404, "Notification introuvable")
+
+    notif.lu = True
+    await db.commit()
+    return {"message": "Notification marquée comme lue", "id": notif_id}
+
+
+@router.patch("/notifications/tout-lire")
+async def marquer_toutes_lues(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Marque toutes les notifications de l'admin comme lues.
+    PATCH /api/admin/notifications/tout-lire
+    """
+    result = await db.execute(
+        select(Notification).where(
+            Notification.destinataire_id == str(admin.id),
+            Notification.type_dest == "admin",
+            Notification.lu == False,
+        )
+    )
+    notifs = result.scalars().all()
+    for n in notifs:
+        n.lu = True
+    await db.commit()
+    return {"message": f"{len(notifs)} notification(s) marquée(s) comme lue(s)"}

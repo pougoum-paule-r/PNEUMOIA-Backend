@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     ADMIN_EMAIL:    str | None = None
     ADMIN_PASSWORD: str | None = None
 
+    # ── Téléphone admin (fallback si non enregistré en BDD) ──
+    ADMIN_PHONE: str | None = None
+
     class Config:
         env_file = str(ENV_FILE)
         extra = "ignore"
