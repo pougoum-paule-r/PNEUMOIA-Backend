@@ -73,3 +73,4 @@ class Medecin(Base):
     
 
     ressources = relationship("RessourceMedicale", back_populates="medecin", cascade="all, delete-orphan")
+    questions  = relationship("QuestionMedecin",   back_populates="medecin", foreign_keys="QuestionMedecin.medecin_id")

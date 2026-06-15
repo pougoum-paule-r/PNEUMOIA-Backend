@@ -45,7 +45,7 @@ class Admin(Base):
     questions_repondues = relationship("QuestionMedecin", back_populates="repondant",
                                    foreign_keys="QuestionMedecin.repondu_par")
                                    
-   faq_publiees        = relationship("FAQPubliee", back_populates="admin")
+    faq_publiees        = relationship("FAQPubliee", back_populates="admin")
     # ── Méthodes utilitaires ───────────────────────────────────────────────────
     def is_otp_valid(self, provided_otp: str) -> bool:
         """Vérifie si l'OTP est correct et non expiré."""

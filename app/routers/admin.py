@@ -2,21 +2,25 @@
 admin_router.py — Routes API pour le panneau d'administration PneumoIA
 
 Organisation :
-   1.  Auth                  → login, reset mot de passe
-   2.  Demandes en attente   → liste, valider, rejeter
-   3.  Validées par mois     → filtrage mois/année
-   4.  Refusées              → liste, supprimer, relancer
-   5.  Médecins actifs       → liste enrichie avec stats
-   6.  Médecin par ID        → profil complet + documents
-   7.  Actions médecins      → suspendre, réactiver, supprimer
-   8.  Médecins par statut   → endpoint générique
-   9.  FAQ — questions       → liste, répondre
-   10. FAQ — publiées        → CRUD admin
-   11. Statistiques          → consultations, répartition géo
-   12. Paramètres            → get, update
+   1.  Auth                        → login, reset mot de passe
+   2.  Demandes en attente         → liste, valider, rejeter
+   3.  Validées par mois           → filtrage mois/année
+   4.  Refusées                    → liste, supprimer, relancer
+   5.  Médecins actifs             → liste enrichie avec stats
+   6.  Médecin par ID              → profil complet + documents
+   7.  Actions médecins            → suspendre, réactiver, supprimer (→ corbeille)
+   8.  Médecins par statut         → endpoint générique
+   9.  FAQ — questions             → liste, répondre
+   10. FAQ — publiées              → CRUD admin
+   11. Statistiques                → consultations, répartition géo, KPIs, top médecins
+   12. Paramètres                  → get, update
+   13. Notifications               → liste, marquer lue, tout lire
+   14. Journal d'audit             → liste, purger
+   15. Corbeille                   → liste, restaurer, supprimer définitivement
+   16. Avis / commentaires         → liste, supprimer, marquer vus
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from typing import Optional
@@ -120,7 +124,6 @@ async def get_demandes(
 ):
     """
     Retourne tous les médecins en attente de validation.
-    Inclut : données personnelles, photo de profil, documents joints.
     GET /api/admin/demandes
     """
     return await AdminService.get_demandes(db)
@@ -168,7 +171,6 @@ async def get_valides(
 ):
     """
     Retourne les médecins validés pour un mois/année donnés.
-    Par défaut : mois en cours.
     GET /api/admin/demandes/valides?mois=6&annee=2026
     """
     return await AdminService.get_valides(db, mois, annee)
@@ -214,7 +216,6 @@ async def relancer_medecin(
 ):
     """
     Envoie un e-mail de relance au médecin refusé via Brevo.
-    relance_sent passe à True — bouton grisé côté frontend.
     POST /api/admin/demandes/{id}/relancer
     Body: { "message": "..." }
     """
@@ -236,9 +237,7 @@ async def get_medecins_actifs(
     admin: Admin = Depends(get_current_admin),
 ):
     """
-    Retourne tous les médecins validés enrichis avec leurs stats :
-    patients, consultations, concordance IA, dernière activité, rang.
-    Le statut Actif/Inactif est calculé côté frontend (règle > 14j).
+    Retourne tous les médecins validés enrichis avec leurs stats.
     GET /api/admin/medecins/actifs
     """
     return await AdminService.get_medecins_actifs(db)
@@ -256,7 +255,6 @@ async def get_medecin_by_id(
 ):
     """
     Retourne le profil complet d'un médecin avec toutes ses stats + documents.
-    Utilisé par ProfilMedecin.jsx pour hydrater la page depuis le backend.
     GET /api/admin/medecins/{id}
     """
     return await AdminService.get_medecin_by_id(db, medecin_id)
@@ -296,7 +294,6 @@ async def reactiver_medecin(
 ):
     """
     Réactive un médecin suspendu — statut repasse à 'valide'.
-    Email de notification envoyé via Brevo avec motif initial.
     POST /api/admin/medecins/{id}/reactiver
     """
     return await AdminService.reactiver_medecin(db, medecin_id, admin.id)
@@ -309,11 +306,11 @@ async def supprimer_medecin(
     admin: Admin = Depends(get_current_admin),
 ):
     """
-    Supprime définitivement un médecin et toutes ses données.
-    Email de notification envoyé via Brevo. Action irréversible.
+    Déplace un médecin dans la corbeille (soft delete — statut = 'corbeille').
+    Suppression définitive depuis /api/admin/corbeille/{id}.
     DELETE /api/admin/medecins/{id}
     """
-    return await AdminService.supprimer_medecin(db, medecin_id)
+    return await AdminService.supprimer_medecin(db, medecin_id, admin.id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -330,7 +327,6 @@ async def get_demandes_par_statut(
     Retourne les médecins filtrés par statut.
     Valeurs acceptées : en_attente | valide | rejete | suspendu
     GET /api/admin/demandes/statut/suspendu
-    GET /api/admin/demandes/statut/rejete
     """
     if statut not in ("en_attente", "valide", "rejete", "suspendu"):
         raise HTTPException(400, f"Statut invalide : {statut}")
@@ -351,8 +347,7 @@ async def get_questions(
 ):
     """
     Retourne les questions posées par les médecins.
-    Filtres optionnels : statut (en_attente|repondu), categorie, ville.
-    GET /api/admin/faq/questions?statut=en_attente&categorie=IA
+    GET /api/admin/faq/questions?statut=en_attente&categorie=IA&ville=Douala
     """
     return await AdminService.get_questions(db, statut=statut, categorie=categorie, ville=ville)
 
@@ -365,8 +360,7 @@ async def repondre_question(
     admin: Admin        = Depends(get_current_admin),
 ):
     """
-    Répond à une question de médecin.
-    Email de réponse envoyé automatiquement via Brevo.
+    Répond à une question de médecin. Email envoyé via Brevo.
     POST /api/admin/faq/questions/{id}/repondre
     Body: { "reponse": "..." }
     """
@@ -423,7 +417,6 @@ async def modifier_faq(
     """
     Modifie une entrée FAQ existante.
     PUT /api/admin/faq/{id}
-    Body: { question, reponse, categorie, publie }
     """
     return await AdminService.modifier_faq(
         db, faq_id,
@@ -454,8 +447,7 @@ async def vider_faq(
     admin: Admin        = Depends(get_current_admin),
 ):
     """
-    Supprime toutes les entrées FAQ définitivement en base.
-    ⚠️  Le frontend masque uniquement — cet endpoint n'est pas appelé pour l'instant.
+    Supprime toutes les entrées FAQ définitivement.
     DELETE /api/admin/faq/vider
     """
     return await AdminService.vider_faq(db, admin.id)
@@ -469,7 +461,6 @@ async def supprimer_faq(
 ):
     """
     Supprime définitivement une entrée FAQ.
-    ⚠️  Le frontend masque uniquement — cet endpoint n'est pas appelé pour l'instant.
     DELETE /api/admin/faq/{id}
     """
     return await AdminService.supprimer_faq(db, faq_id, admin.id)
@@ -479,42 +470,57 @@ async def supprimer_faq(
 # 11. STATISTIQUES
 # ─────────────────────────────────────────────────────────────────────────────
 
+@router.get("/stats/kpis")
+async def get_kpis(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    KPIs globaux du dashboard : médecins actifs, demandes en attente,
+    consultations total, précision IA moyenne.
+    GET /api/admin/stats/kpis
+    """
+    return await AdminService.get_kpis(db)
+
+
 @router.get("/stats/consultations/semaine")
 async def get_consultations_semaine(
     db:    AsyncSession = Depends(get_db),
     admin: Admin        = Depends(get_current_admin),
 ):
     """
-    Consultations par jour sur les 30 derniers jours.
-    Utilisé par CourbeActivite.jsx.
+    Consultations par jour sur les 30 derniers jours — pour la courbe d'activité.
     GET /api/admin/stats/consultations/semaine
+    Retourne : { jours: [{ j: "Lun", c: 432 }, ...] }
     """
     return await AdminService.get_consultations_semaine(db)
 
 
 @router.get("/stats/consultations/annee")
 async def get_consultations_annee(
-    year:  int = 2026,
+    year:  int = Query(default=2026),
     db:    AsyncSession = Depends(get_db),
     admin: Admin        = Depends(get_current_admin),
 ):
     """
-    Consultations agrégées par mois pour une année (12 entrées).
+    Consultations agrégées par mois pour une année (12 valeurs).
     GET /api/admin/stats/consultations/annee?year=2026
+    Retourne : { mois: [4820, 5200, 0, ...] }
     """
     return await AdminService.get_consultations_annee(db, year)
 
 
 @router.get("/stats/consultations/total")
 async def get_consultations_total(
-    from_date: Optional[str] = None,
-    to_date:   Optional[str] = None,
+    from_date: Optional[str] = Query(None, alias="from"),
+    to_date:   Optional[str] = Query(None, alias="to"),
     db:    AsyncSession = Depends(get_db),
     admin: Admin        = Depends(get_current_admin),
 ):
     """
-    Total consultations sur une période personnalisée.
+    KPIs consultations sur une période personnalisée.
     GET /api/admin/stats/consultations/total?from=2026-01-01&to=2026-06-30
+    Retourne : { total, moyenne_par_jour, pic, variation_vs_mois_precedent }
     """
     if not from_date or not to_date:
         raise HTTPException(400, "Paramètres 'from' et 'to' requis (format YYYY-MM-DD).")
@@ -523,14 +529,33 @@ async def get_consultations_total(
 
 @router.get("/stats/repartition-geo")
 async def get_repartition_geo(
+    mois:  Optional[int] = None,
+    annee: Optional[int] = None,
     db:    AsyncSession = Depends(get_db),
     admin: Admin        = Depends(get_current_admin),
 ):
     """
-    Répartition des médecins validés par ville.
-    GET /api/admin/stats/repartition-geo
+    Répartition des médecins validés par ville et par région.
+    GET /api/admin/stats/repartition-geo?mois=6&annee=2026
+    Retourne : { villes: [...], regions: [...] }
     """
-    return await AdminService.get_repartition_geo(db)
+    return await AdminService.get_repartition_geo(db, mois, annee)
+
+
+@router.get("/stats/top-medecins-concordance")
+async def get_top_medecins_concordance(
+    mois:  Optional[int] = None,
+    annee: Optional[int] = None,
+    limit: int = Query(default=5),
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Top N médecins classés par taux de concordance IA décroissant.
+    GET /api/admin/stats/top-medecins-concordance?mois=6&annee=2026
+    Retourne : [{ id, prenom, nom, photo_url, concordance_ia, nb_consultations, tendance }]
+    """
+    return await AdminService.get_top_medecins_concordance(db, limit)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -544,7 +569,6 @@ async def get_parametres(
 ):
     """
     Retourne les paramètres globaux de la plateforme.
-    Fallback sur valeurs par défaut si table absente.
     GET /api/admin/parametres
     """
     return await AdminService.get_parametres(db)
@@ -559,7 +583,6 @@ async def update_parametres(
     """
     Met à jour les paramètres globaux (upsert sur clé "global").
     PUT /api/admin/parametres
-    Body: { tous les paramètres }
     """
     return await AdminService.update_parametres(db, body, admin.id)
 
@@ -575,9 +598,8 @@ async def get_notifications(
     admin: Admin        = Depends(get_current_admin),
 ):
     """
-    Retourne les notifications de l'admin (nouvelles inscriptions médecins, etc.).
-    Paramètre optionnel : ?non_lues_seulement=true pour filtrer les non lues.
-    GET /api/admin/notifications
+    Retourne les notifications de l'admin (nouvelles inscriptions, etc.).
+    GET /api/admin/notifications?non_lues_seulement=true
     """
     query = (
         select(Notification)
@@ -593,11 +615,10 @@ async def get_notifications(
 
     result = await db.execute(query)
     notifs = result.scalars().all()
-
     non_lues = sum(1 for n in notifs if not n.lu)
 
     return {
-        "total": len(notifs),
+        "total":    len(notifs),
         "non_lues": non_lues,
         "notifications": [
             {
@@ -634,7 +655,6 @@ async def marquer_notification_lue(
     notif = result.scalar_one_or_none()
     if not notif:
         raise HTTPException(404, "Notification introuvable")
-
     notif.lu = True
     await db.commit()
     return {"message": "Notification marquée comme lue", "id": notif_id}
@@ -661,3 +681,120 @@ async def marquer_toutes_lues(
         n.lu = True
     await db.commit()
     return {"message": f"{len(notifs)} notification(s) marquée(s) comme lue(s)"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 14. JOURNAL D'AUDIT
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/audit/logs")
+async def get_audit_logs(
+    type:   Optional[str] = None,
+    statut: Optional[str] = None,
+    db:     AsyncSession = Depends(get_db),
+    admin:  Admin        = Depends(get_current_admin),
+):
+    """
+    Retourne les entrées du journal d'audit avec filtres optionnels.
+    GET /api/admin/audit/logs?type=Connexion&statut=success
+    Retourne : { logs: [{ id, action, acteur, date, statut, type }] }
+    """
+    return await AdminService.get_audit_logs(db, type=type, statut=statut)
+
+
+@router.delete("/audit/logs/purger")
+async def purger_audit_logs(
+    body:  dict,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Supprime les entrées du journal antérieures à N jours (0 = tout purger).
+    DELETE /api/admin/audit/logs/purger
+    Body: { "days": 30 }
+    """
+    days = int(body.get("days", 30))
+    return await AdminService.purger_audit_logs(db, days, admin.id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 15. CORBEILLE
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/corbeille")
+async def get_corbeille(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Retourne les médecins en corbeille (supprimés mais restaurables).
+    GET /api/admin/corbeille
+    """
+    return await AdminService.get_corbeille(db)
+
+
+@router.post("/corbeille/{medecin_id}/restaurer")
+async def restaurer_medecin(
+    medecin_id: str,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Restaure un médecin depuis la corbeille — reprend son statut précédent.
+    POST /api/admin/corbeille/{id}/restaurer
+    """
+    return await AdminService.restaurer_medecin(db, medecin_id, admin.id)
+
+
+@router.delete("/corbeille/{medecin_id}")
+async def supprimer_definitif(
+    medecin_id: str,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Supprime définitivement un médecin depuis la corbeille. Irréversible.
+    DELETE /api/admin/corbeille/{id}
+    """
+    return await AdminService.supprimer_definitif(db, medecin_id, admin.id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 16. AVIS / COMMENTAIRES
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/avis")
+async def get_avis(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Retourne tous les avis publiés par les médecins sur la plateforme.
+    GET /api/admin/avis
+    """
+    return await AdminService.get_avis(db)
+
+
+@router.delete("/avis/{avis_id}")
+async def supprimer_avis(
+    avis_id: str,
+    db:      AsyncSession = Depends(get_db),
+    admin:   Admin        = Depends(get_current_admin),
+):
+    """
+    Supprime un avis. Le médecin est notifié par email.
+    DELETE /api/admin/avis/{id}
+    """
+    return await AdminService.supprimer_avis(db, avis_id, admin.id)
+
+
+@router.patch("/avis/marquer-vus")
+async def marquer_avis_vus(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Marque tous les avis comme vus.
+    PATCH /api/admin/avis/marquer-vus
+    """
+    return await AdminService.marquer_avis_vus(db)

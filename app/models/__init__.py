@@ -16,8 +16,8 @@ from app.models.otp              import OTPCode
 from app.models.notification     import Notification
 from app.models.audit_log        import AuditLog
 from app.models.cas_clinique_public import CasCliniquPublic
-from app.models.question_medecin import QuestionMedecin
-from app.models.faq_publiee      import FAQPubliee
+from app.models.questionMedecins import QuestionMedecin
+from app.models.faqPubliee       import FAQPubliee
 from app.models.aide_soignant       import AideSoignant
 from app.models.avis_patient        import AvisPatient
 from app.models.ressource           import RessourceMedicale
