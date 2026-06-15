@@ -17,7 +17,7 @@ class Notification(Base):
     id              = Column(String(15), primary_key=True, default=generate_id)
     destinataire_id = Column(String(15), nullable=False)   # medecin.id ou admin.id
     type_dest       = Column(
-        Enum("medecin", "admin", name="type_destinataire"),
+        Enum("medecin", "admin", "aide_soignant", name="type_destinataire"),
         nullable=False,
     )
     type_notif      = Column(String(100), nullable=False)

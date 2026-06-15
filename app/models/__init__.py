@@ -17,8 +17,11 @@ from app.models.notification     import Notification
 from app.models.audit_log        import AuditLog
 from app.models.cas_clinique_public import CasCliniquPublic
 from app.models.aide_soignant       import AideSoignant
-from app.models.avis_patient       import AvisPatient
-from app.models.ressource import RessourceMedicale
+from app.models.avis_patient        import AvisPatient
+from app.models.ressource           import RessourceMedicale
+from app.models.message_equipe      import MessageEquipe, LikeMessageEquipe
+from app.models.commentaire         import LikeCommentaire  # Commentaire already imported above
+from app.models.question_admin      import QuestionAdmin
 
 __all__ = [
     "Admin",
@@ -33,6 +36,7 @@ __all__ = [
     "MembreCommunaute",
     "Publication",
     "Commentaire",
+    "LikeCommentaire",
     "Reaction",
     "OTPCode",
     "Notification",
@@ -41,4 +45,7 @@ __all__ = [
     "AideSoignant",
     "AvisPatient",
     "RessourceMedicale",
+    "MessageEquipe",
+    "LikeMessageEquipe",
+    "QuestionAdmin",
 ]

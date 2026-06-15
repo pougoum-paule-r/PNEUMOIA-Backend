@@ -2,6 +2,7 @@
 from datetime import datetime
 
 from sqlalchemy import Column, String, Boolean, DateTime, Enum, Text, ForeignKey
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -47,6 +48,7 @@ class Medecin(Base):
     activation_expires = Column(DateTime,   nullable=True)
     code_referent       = Column(String(10),  unique=True, nullable=True, default=generate_code_referent)
     code_referent_actif = Column(Boolean,     nullable=False, default=True)
+    preferences         = Column(JSONB,       nullable=True,  server_default='{}')
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
 
 

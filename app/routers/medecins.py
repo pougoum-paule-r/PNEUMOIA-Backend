@@ -2,9 +2,12 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
+from pydantic import BaseModel
+from typing import Optional
 
 from app.database import get_db
 from app.core.security import get_current_medecin
+from app.config import settings
 from app.models.medecin import Medecin
 from app.models.patient import Patient
 from app.models.consultation import Consultation
@@ -12,6 +15,59 @@ from app.models.diagnostic_ia import DiagnosticIA
 from app.models.feedback_ia import FeedbackIA
 
 router_medecins = APIRouter(prefix="/api/v1/medecins", tags=["Médecins"])
+
+_PREFS_MEDECIN_DEFAULTS = {
+    "emailNotifications":       True,
+    "smsNotifications":         False,
+    "newsletter":               True,
+    "rappelsConsultations":     True,
+    "rappelsSuivi":             True,
+    "notifNouvellesConsultations": True,
+    "notifMessagesRecus":       True,
+    "notifCommentairesCas":     True,
+    "notifPartagesRecus":       True,
+    "notifRappelsSysteme":      True,
+    "notifMisesAJour":          True,
+    "notifEvenements":          False,
+    "langue":                   "fr",
+    "timezone":                 "Africa/Douala",
+    "compactView":              False,
+    "showThumbnails":           True,
+    "defaultView":              "cards",
+    "itemsPerPage":             10,
+    "sortBy":                   "date",
+    "sortOrder":                "desc",
+    "profilPublic":             True,
+    "visibleDansAnnuaire":      True,
+    "anonymisationCas":         True,
+    "accepteDemandes":          True,
+}
+
+class PreferencesMedecinRequest(BaseModel):
+    emailNotifications:           Optional[bool] = None
+    smsNotifications:             Optional[bool] = None
+    newsletter:                   Optional[bool] = None
+    rappelsConsultations:         Optional[bool] = None
+    rappelsSuivi:                 Optional[bool] = None
+    notifNouvellesConsultations:  Optional[bool] = None
+    notifMessagesRecus:           Optional[bool] = None
+    notifCommentairesCas:         Optional[bool] = None
+    notifPartagesRecus:           Optional[bool] = None
+    notifRappelsSysteme:          Optional[bool] = None
+    notifMisesAJour:              Optional[bool] = None
+    notifEvenements:              Optional[bool] = None
+    langue:                       Optional[str]  = None
+    timezone:                     Optional[str]  = None
+    compactView:                  Optional[bool] = None
+    showThumbnails:               Optional[bool] = None
+    defaultView:                  Optional[str]  = None
+    itemsPerPage:                 Optional[int]  = None
+    sortBy:                       Optional[str]  = None
+    sortOrder:                    Optional[str]  = None
+    profilPublic:                 Optional[bool] = None
+    visibleDansAnnuaire:          Optional[bool] = None
+    anonymisationCas:             Optional[bool] = None
+    accepteDemandes:              Optional[bool] = None
 
 
 @router_medecins.get("/liste")
@@ -121,3 +177,170 @@ async def mon_rang(
         "nb_consultations": nb_consultations,
         "nb_partages":    nb_partages,
     }
+
+
+@router_medecins.get("/me/preferences")
+async def get_preferences_medecin(
+    db: AsyncSession = Depends(get_db),
+    medecin: Medecin = Depends(get_current_medecin),
+):
+    stored = medecin.preferences or {}
+    return {**_PREFS_MEDECIN_DEFAULTS, **stored}
+
+
+@router_medecins.patch("/me/preferences")
+async def update_preferences_medecin(
+    body: PreferencesMedecinRequest,
+    db: AsyncSession = Depends(get_db),
+    medecin: Medecin = Depends(get_current_medecin),
+):
+    current = dict(medecin.preferences or {})
+    current.update(body.model_dump(exclude_none=True))
+    medecin.preferences = current
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(medecin, "preferences")
+    await db.commit()
+    return {**_PREFS_MEDECIN_DEFAULTS, **current}
+
+
+@router_medecins.get("/public/stats", tags=["Public"])
+async def public_stats(db: AsyncSession = Depends(get_db)):
+    """Statistiques publiques de la plateforme."""
+    r_med = await db.execute(select(func.count(Medecin.id)).where(Medecin.statut == "valide"))
+    nb_medecins = r_med.scalar_one() or 0
+
+    r_cons = await db.execute(select(func.count(Consultation.id)))
+    nb_consultations = r_cons.scalar_one() or 0
+
+    conc_float = case((FeedbackIA.concordance == True, 1.0), else_=0.0)  # noqa: E712
+    r_conc = await db.execute(select(func.avg(conc_float)).where(FeedbackIA.concordance.isnot(None)))
+    raw_c = r_conc.scalar_one()
+    concordance = round(float(raw_c) * 100, 1) if raw_c is not None else 0.0
+
+    return {
+        "nb_medecins":      nb_medecins,
+        "nb_consultations": nb_consultations,
+        "precision_ia":     concordance,
+    }
+
+
+def _photo_url(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    if raw.startswith("http"):
+        return raw
+    if raw.startswith("/"):
+        return f"{settings.BACKEND_URL}{raw}"
+    return f"{settings.BACKEND_URL}/{raw.replace(chr(92), '/').lstrip('./')}"
+
+
+@router_medecins.get("/public/top4", tags=["Public"])
+async def top4_medecins(db: AsyncSession = Depends(get_db)):
+    """Top 4 médecins validés par score (patients×2 + consultations×3 + cas partagés) — public."""
+    r = await db.execute(
+        select(Medecin).where(Medecin.statut == "valide")
+    )
+    medecins = r.scalars().all()
+
+    scores = []
+    for m in medecins:
+        rp = await db.execute(select(func.count(Patient.id)).where(Patient.created_by == m.id, Patient.deleted_at.is_(None)))
+        rc = await db.execute(select(func.count(Consultation.id)).where(Consultation.medecin_id == m.id, Consultation.statut == "terminee"))
+        rs = await db.execute(select(func.count(Consultation.id)).where(Consultation.medecin_id == m.id, Consultation.partage["actif"].astext == "true"))
+        score = (rp.scalar_one() or 0) * 2 + (rc.scalar_one() or 0) * 3 + (rs.scalar_one() or 0)
+
+        # Concordance IA
+        conc_float = case((FeedbackIA.concordance == True, 1.0), else_=0.0)  # noqa: E712
+        rf = await db.execute(
+            select(func.avg(conc_float))
+            .join(DiagnosticIA, FeedbackIA.diagnostic_id == DiagnosticIA.id)
+            .join(Consultation, DiagnosticIA.consultation_id == Consultation.id)
+            .where(Consultation.medecin_id == m.id)
+            .where(FeedbackIA.concordance.isnot(None))
+        )
+        raw_c = rf.scalar_one()
+        concordance = round(float(raw_c) * 100, 1) if raw_c is not None else 0.0
+
+        scores.append({
+            "id":         m.id,
+            "nom":        m.nom,
+            "prenom":     m.prenom,
+            "specialite": m.specialite or "Pneumologue",
+            "hopital":    m.etablissement or "",
+            "photo_url":  _photo_url(m.photo_url),
+            "concordance": concordance,
+            "score":      score,
+        })
+
+    scores.sort(key=lambda x: x["score"], reverse=True)
+    return scores[:4]
+
+
+@router_medecins.get("/public/temoignages", tags=["Public"])
+async def public_temoignages(db: AsyncSession = Depends(get_db)):
+    """Retourne les vrais commentaires de feedback IA laissés par les médecins validés."""
+    r = await db.execute(
+        select(FeedbackIA, Medecin)
+        .join(Medecin, FeedbackIA.medecin_id == Medecin.id)
+        .where(
+            FeedbackIA.commentaire.isnot(None),
+            FeedbackIA.commentaire != "",
+            Medecin.statut == "valide",
+        )
+        .order_by(FeedbackIA.created_at.desc())
+        .limit(12)
+    )
+    rows = r.all()
+
+    seen = set()
+    results = []
+    for feedback, medecin in rows:
+        if medecin.id not in seen:
+            seen.add(medecin.id)
+            results.append({
+                "nom":        medecin.nom,
+                "prenom":     medecin.prenom,
+                "specialite": medecin.specialite or "Pneumologue",
+                "hopital":    medecin.etablissement or "",
+                "photo_url":  _photo_url(medecin.photo_url),
+                "texte":      feedback.commentaire,
+                "date":       feedback.created_at.strftime("%d.%m.%Y"),
+            })
+        if len(results) >= 6:
+            break
+    return results
+
+
+@router_medecins.get("/public/repartition", tags=["Public"])
+async def repartition_pathologies(db: AsyncSession = Depends(get_db)):
+    """Répartition publique des diagnostics principaux par pathologie."""
+    from sqlalchemy import text as sa_text
+    r = await db.execute(
+        sa_text("""
+            SELECT
+                (maladies->0->>'nom') AS nom,
+                COUNT(*)::int         AS total
+            FROM diagnostics_ia
+            WHERE maladies IS NOT NULL
+              AND jsonb_array_length(maladies) > 0
+            GROUP BY nom
+            ORDER BY total DESC
+            LIMIT 10
+        """)
+    )
+    rows = r.fetchall()
+    grand_total = sum(row.total for row in rows) or 1
+    colors = [
+        "bg-blue-500", "bg-indigo-500", "bg-purple-500",
+        "bg-pink-500",  "bg-orange-500", "bg-red-500",
+        "bg-teal-500",  "bg-cyan-500",   "bg-amber-500", "bg-emerald-500",
+    ]
+    return [
+        {
+            "name":       row.nom or "Inconnu",
+            "count":      row.total,
+            "percentage": round(row.total / grand_total * 100, 1),
+            "color":      colors[i % len(colors)],
+        }
+        for i, row in enumerate(rows)
+    ]

@@ -1,6 +1,7 @@
 import random, string
 from datetime import datetime
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -31,6 +32,8 @@ class AideSoignant(Base):
     peut_supprimer        = Column(Boolean, nullable=False, default=False)
     peut_voir_diagnostic  = Column(Boolean, nullable=False, default=False)
     peut_prescrire        = Column(Boolean, nullable=False, default=False)
+
+    preferences = Column(JSONB, nullable=True, server_default='{}')
 
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
 
