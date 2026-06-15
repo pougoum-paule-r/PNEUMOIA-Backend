@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     SMTP_USER:     str
     SMTP_PASSWORD: str
     FROM_EMAIL:    str
+    BREVO_API_KEY: str | None = None   # si défini → API HTTP (plus rapide que SMTP)
 
     # ── Twilio ────────────────────────────────────────────────
     TWILIO_ACCOUNT_SID:  str
