@@ -1,8 +1,10 @@
 # app/routers/aides.py
-import asyncio, random, string
+import random, string, logging
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -119,11 +121,16 @@ def _send_email(to: str, subject: str, html: str, aide: "AideSoignant | None" = 
     if aide is not None:
         prefs = aide.preferences or {}
         if not prefs.get("notif_email", True):
+            logger.warning("Email non envoyé à %s : notif_email désactivé", to)
             return
     try:
+        print(f"[EMAIL] Tentative envoi → {to}", flush=True)
         smtp_send(to, subject, html)
+        print(f"[EMAIL] Succès → {to}", flush=True)
     except Exception as e:
-        print(f"⚠️ Email non envoyé à {to} : {e}")
+        import traceback
+        print(f"[EMAIL] ERREUR → {to} : {e}", flush=True)
+        traceback.print_exc()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -213,7 +220,7 @@ async def inscription_aide(body: InscriptionAideRequest, db: AsyncSession = Depe
 # POST /aides/login  (étape 1 : email + mot de passe → OTP)
 # ─────────────────────────────────────────────────────────────────
 @router.post("/login")
-async def login_aide(body: LoginAideRequest, db: AsyncSession = Depends(get_db)):
+async def login_aide(body: LoginAideRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(AideSoignant).where(AideSoignant.email == body.email))
     aide   = result.scalar_one_or_none()
 
@@ -231,7 +238,7 @@ async def login_aide(body: LoginAideRequest, db: AsyncSession = Depends(get_db))
     code   = ''.join(random.choices(string.digits, k=6))
     expiry = datetime.utcnow() + timedelta(minutes=5)
     _aide_otp[aide.id] = (code, expiry)
-    print(f"🔐 OTP aide {aide.id} ({aide.email}): {code}")  # fallback console
+    print(f"[OTP] Généré pour {aide.email} | notif_email={( aide.preferences or {}).get('notif_email', True)}", flush=True)
 
     _html_otp = f"""
         <div style="font-family:sans-serif;max-width:400px;margin:auto">
@@ -245,9 +252,9 @@ async def login_aide(body: LoginAideRequest, db: AsyncSession = Depends(get_db))
           <p style="color:#6b7280;font-size:13px">Ce code expire dans 5 minutes.</p>
         </div>
         """
-    asyncio.create_task(asyncio.to_thread(
-        _send_email, aide.email, "🔐 PneumoIA — Code de connexion", _html_otp, aide
-    ))
+    background_tasks.add_task(
+        _send_email, aide.email, "🔐 PneumoIA — Code de connexion", _html_otp
+    )
 
     return {"aide_id": aide.id}
 

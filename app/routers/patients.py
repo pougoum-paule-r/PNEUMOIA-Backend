@@ -531,6 +531,28 @@ async def modifier_patient(
     patient.personne_a_contacter = payload.personne_a_contacter
     patient.telephone_urgence    = payload.telephone_urgence
 
+    await db.flush()
+
+    # Notifier les aides actifs du médecin
+    from app.models.aide_soignant import AideSoignant
+    from app.services.notification_service import push_notif
+    aides_r = await db.execute(
+        select(AideSoignant).where(
+            AideSoignant.medecin_id == medecin.id,
+            AideSoignant.statut     == "actif",
+        )
+    )
+    for aide in aides_r.scalars().all():
+        await push_notif(
+            db,
+            dest_id    = aide.id,
+            type_dest  = "aide_soignant",
+            type_notif = "aide_modif_patient",
+            titre      = "Dossier patient modifié",
+            message    = f"Dr. {medecin.prenom} {medecin.nom} a modifié le dossier de {patient.prenom} {patient.nom}.",
+            meta       = {"lien": "/aide/patients", "patient_id": patient.id},
+        )
+
     await db.commit()
     await db.refresh(patient)
     return patient

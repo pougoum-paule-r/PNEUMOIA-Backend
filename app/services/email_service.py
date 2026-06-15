@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import smtplib
+import urllib.request
+import json as _json
 from email.mime.text        import MIMEText
 from email.mime.multipart   import MIMEMultipart
 from datetime               import datetime, timedelta
@@ -9,20 +11,50 @@ from app.config             import settings
 logger = logging.getLogger(__name__)
 
 
-# ─── Expédition SMTP générique — synchrone (appelé via to_thread) ────────────
-def _send(to_email: str, subject: str, html: str) -> None:
-    """Envoie un email HTML via SMTP. Fonction bloquante — ne pas appeler directement."""
+def _send_via_api(to_email: str, subject: str, html: str) -> None:
+    """Envoie via l'API HTTP Brevo — plus rapide que SMTP (file prioritaire)."""
+    payload = _json.dumps({
+        "sender":      {"name": "PneumoIA", "email": settings.FROM_EMAIL},
+        "to":          [{"email": to_email}],
+        "subject":     subject,
+        "htmlContent": html,
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data    = payload,
+        headers = {
+            "Content-Type": "application/json",
+            "api-key":      settings.BREVO_API_KEY,
+        },
+        method  = "POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        if resp.status not in (200, 201):
+            raise RuntimeError(f"Brevo API {resp.status}: {resp.read()}")
+
+
+def _send_via_smtp(to_email: str, subject: str, html: str) -> None:
+    """Envoie via SMTP Brevo — fallback si pas de clé API."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = settings.FROM_EMAIL
     msg["To"]      = to_email
     msg.attach(MIMEText(html, "html"))
 
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
         server.ehlo()
         server.starttls()
+        server.ehlo()
         server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
         server.sendmail(settings.FROM_EMAIL, to_email, msg.as_string())
+
+
+def _send(to_email: str, subject: str, html: str) -> None:
+    """Envoie un email HTML. Utilise l'API Brevo si BREVO_API_KEY est défini, sinon SMTP."""
+    if settings.BREVO_API_KEY:
+        _send_via_api(to_email, subject, html)
+    else:
+        _send_via_smtp(to_email, subject, html)
 
 
 async def _send_async(to_email: str, subject: str, html: str) -> None:
