@@ -88,6 +88,12 @@ class ChangePasswordRequest(BaseModel):
     ancien_password: str
     nouveau_password: str
 
+class PreferencesAideRequest(BaseModel):
+    notif_email:        Optional[bool] = None
+    notif_systeme:      Optional[bool] = None
+    notif_code_referent: Optional[bool] = None
+    theme:              Optional[str]  = None   # "light" | "dark"
+
 # ── Helper JWT ────────────────────────────────────────────────────
 async def get_medecin_from_token(
     credentials: HTTPAuthorizationCredentials,
@@ -108,7 +114,12 @@ async def get_medecin_from_token(
     return medecin
 
 
-def _send_email(to: str, subject: str, html: str):
+def _send_email(to: str, subject: str, html: str, aide: "AideSoignant | None" = None):
+    """Envoie un email si notif_email n'est pas désactivé dans les préférences aide."""
+    if aide is not None:
+        prefs = aide.preferences or {}
+        if not prefs.get("notif_email", True):
+            return
     try:
         smtp_send(to, subject, html)
     except Exception as e:
@@ -165,6 +176,18 @@ async def inscription_aide(body: InscriptionAideRequest, db: AsyncSession = Depe
         statut        = "en_attente",
     )
     db.add(aide)
+    await db.flush()
+
+    from app.services.notification_service import push_notif
+    await push_notif(
+        db,
+        dest_id   = medecin.id,
+        type_dest = "medecin",
+        type_notif= "aide_demande",
+        titre     = "Nouvelle demande d'aide soignant",
+        message   = f"{body.prenom} {body.nom} ({body.email}) souhaite rejoindre votre équipe.",
+        meta      = {"lien": "/medecin/parametres"},
+    )
     await db.commit()
 
     _send_email(
@@ -223,7 +246,7 @@ async def login_aide(body: LoginAideRequest, db: AsyncSession = Depends(get_db))
         </div>
         """
     asyncio.create_task(asyncio.to_thread(
-        _send_email, aide.email, "🔐 PneumoIA — Code de connexion", _html_otp
+        _send_email, aide.email, "🔐 PneumoIA — Code de connexion", _html_otp, aide
     ))
 
     return {"aide_id": aide.id}
@@ -349,6 +372,19 @@ async def valider_aide(
         raise HTTPException(404, "Aide soignant introuvable")
 
     aide.statut = "actif"
+    await db.flush()
+
+    from app.services.notification_service import push_notif
+    await push_notif(
+        db,
+        dest_id   = aide.id,
+        type_dest = "aide_soignant",
+        type_notif= "validation",
+        titre     = "Compte validé",
+        message   = f"{medecin.civilite or 'Dr'} {medecin.prenom} {medecin.nom} a approuvé votre compte. Vous pouvez maintenant accéder à toutes vos fonctionnalités.",
+        meta      = {"lien": "/aide/dashboard"},
+    )
+
     await db.commit()
 
     frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
@@ -366,7 +402,8 @@ async def valider_aide(
             Se connecter
           </a>
         </div>
-        """
+        """,
+        aide    = aide,
     )
 
     return {"message": f"{aide.prenom} {aide.nom} validé avec succès"}
@@ -409,7 +446,8 @@ async def refuser_aide(
             Si vous pensez qu'il s'agit d'une erreur, contactez directement le médecin.
           </p>
         </div>
-        """
+        """,
+        aide    = aide,
     )
 
     return {"message": f"Demande de {aide.prenom} {aide.nom} refusée"}
@@ -443,6 +481,18 @@ async def modifier_permissions(
     aide.peut_supprimer        = body.peut_supprimer
     aide.peut_voir_diagnostic  = body.peut_voir_diagnostic
     aide.peut_prescrire        = body.peut_prescrire
+    await db.flush()
+
+    from app.services.notification_service import push_notif
+    await push_notif(
+        db,
+        dest_id   = aide.id,
+        type_dest = "aide_soignant",
+        type_notif= "permission",
+        titre     = "Permissions mises à jour",
+        message   = f"{medecin.civilite or 'Dr'} {medecin.prenom} {medecin.nom} a modifié vos permissions d'accès à la plateforme.",
+        meta      = {"lien": "/aide/parametres"},
+    )
 
     await db.commit()
     return {"message": "Permissions mises à jour"}
@@ -507,7 +557,7 @@ async def regenerer_code(
             break
 
     medecin.code_referent = nouveau_code
-    await db.commit()
+    await db.flush()
 
     # Notifier tous les aides actifs du changement de code
     aides_result = await db.execute(
@@ -516,7 +566,23 @@ async def regenerer_code(
             AideSoignant.statut == "actif"
         )
     )
-    for aide in aides_result.scalars().all():
+    aides_actifs = aides_result.scalars().all()
+
+    from app.services.notification_service import push_notif
+    for aide in aides_actifs:
+        await push_notif(
+            db,
+            dest_id   = aide.id,
+            type_dest = "aide_soignant",
+            type_notif= "code_referent",
+            titre     = "Code référent mis à jour",
+            message   = f"{medecin.civilite or 'Dr'} {medecin.prenom} {medecin.nom} a régénéré son code référent. Votre accès reste actif.",
+            meta      = {"lien": "/aide/parametres"},
+        )
+
+    await db.commit()
+
+    for aide in aides_actifs:
         _send_email(
             to      = aide.email,
             subject = "🔄 PneumoIA — Code référent mis à jour",
@@ -527,7 +593,8 @@ async def regenerer_code(
               <p>Votre accès reste actif. Ce changement concerne uniquement les nouvelles inscriptions.</p>
               <p style="color:#6b7280;font-size:13px">Si vous avez des questions, contactez directement votre médecin référent.</p>
             </div>
-            """
+            """,
+            aide    = aide,
         )
 
     return {
@@ -637,6 +704,19 @@ async def creer_patient_aide(
         aide_id              = aide.id,
     )
     db.add(patient)
+    await db.flush()
+
+    from app.services.notification_service import push_notif
+    await push_notif(
+        db,
+        dest_id   = aide.medecin_id,
+        type_dest = "medecin",
+        type_notif= "aide_nouveau_patient",
+        titre     = "Nouveau patient créé",
+        message   = f"{aide.prenom} {aide.nom} a créé le dossier de {body.prenom} {body.nom.upper()}.",
+        meta      = {"lien": "/medecin/patients"},
+    )
+
     await db.commit()
     await db.refresh(patient)
     return {
@@ -718,8 +798,58 @@ async def changer_password_aide(
         raise HTTPException(400, "Le nouveau mot de passe doit faire au moins 6 caractères")
 
     aide.password_hash = hash_password(body.nouveau_password)
+    await db.flush()
+
+    from app.services.notification_service import push_notif
+    await push_notif(
+        db,
+        dest_id   = aide.id,
+        type_dest = "aide_soignant",
+        type_notif= "parametres",
+        titre     = "Mot de passe modifié",
+        message   = "Votre mot de passe a été modifié avec succès. Si vous n'êtes pas à l'origine de cette action, contactez votre médecin référent.",
+        meta      = {"lien": "/aide/parametres"},
+    )
     await db.commit()
     return {"message": "Mot de passe modifié avec succès"}
+
+
+# ─────────────────────────────────────────────────────────────────
+# GET /aides/me/preferences — Lire les préférences
+# ─────────────────────────────────────────────────────────────────
+_PREFS_DEFAULTS = {
+    "notif_email":         True,
+    "notif_systeme":       True,
+    "notif_code_referent": True,
+    "theme":               "light",
+}
+
+@router.get("/me/preferences")
+async def get_preferences_aide(
+    aide: AideSoignant = Depends(get_current_aide),
+):
+    stored = aide.preferences or {}
+    return {**_PREFS_DEFAULTS, **stored}
+
+
+# ─────────────────────────────────────────────────────────────────
+# PATCH /aides/me/preferences — Mettre à jour les préférences
+# ─────────────────────────────────────────────────────────────────
+@router.patch("/me/preferences")
+async def update_preferences_aide(
+    body: PreferencesAideRequest,
+    aide: AideSoignant = Depends(get_current_aide),
+    db:   AsyncSession  = Depends(get_db),
+):
+    current = dict(aide.preferences or {})
+    updates = body.model_dump(exclude_none=True)
+    current.update(updates)
+    aide.preferences = current
+    # Force SQLAlchemy à détecter le changement sur un champ JSONB
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(aide, "preferences")
+    await db.commit()
+    return {**_PREFS_DEFAULTS, **current}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -810,6 +940,19 @@ async def modifier_patient_aide(
             patient.date_naissance = date_type.fromisoformat(body.date_naissance)
         except ValueError:
             pass
+
+    await db.flush()
+
+    from app.services.notification_service import push_notif
+    await push_notif(
+        db,
+        dest_id   = aide.medecin_id,
+        type_dest = "medecin",
+        type_notif= "aide_modif_patient",
+        titre     = "Dossier patient modifié",
+        message   = f"{aide.prenom} {aide.nom} a modifié le dossier de {patient.prenom} {patient.nom}.",
+        meta      = {"lien": "/medecin/patients"},
+    )
 
     await db.commit()
     await db.refresh(patient)

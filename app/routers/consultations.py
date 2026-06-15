@@ -345,8 +345,14 @@ async def telecharger_pdf(
     c = await get_ma_consultation(consultation_id, medecin.id, db)
     patient = await db.get(Patient, c.patient_id)
 
+    # Charger le diagnostic explicitement — le lazy-load SQLAlchemy est interdit en async
+    r_diag = await db.execute(
+        select(DiagnosticIA).where(DiagnosticIA.consultation_id == c.id)
+    )
+    diag = r_diag.scalar_one_or_none()
+
     from app.services.pdf_service import generer_bilan_pdf
-    pdf_bytes = await generer_bilan_pdf(consultation=c, patient=patient)
+    pdf_bytes = await generer_bilan_pdf(consultation=c, patient=patient, diag=diag)
 
     return StreamingResponse(
         iter([pdf_bytes]),

@@ -9,11 +9,15 @@ from app.config import settings
 from app.database import engine, Base
 from app.init_db import seed_admin
 
-from app.routers import auth, admin, diagnostics, patients, consultations, aides, ressources
-from app.routers.medecins    import router_medecins
-from app.routers.communautes import router_communautes
-from app.routers.aides       import router as router_aides
-from app.routers.monitoring  import router as router_monitoring
+from app.routers import auth, admin, diagnostics, patients, consultations, ressources
+from app.routers.medecins         import router_medecins
+from app.routers.communautes      import router_communautes
+from app.routers.aides            import router as router_aides
+from app.routers.monitoring       import router as router_monitoring
+from app.routers.messages_equipe  import router as router_messages_equipe
+from app.routers.publications     import router as router_publications
+from app.routers.questions_admin  import router as router_questions_admin
+from app.routers.notifications    import router as router_notifications
 
 
 app = FastAPI(title="PneumoIA API", version="1.0.0")
@@ -37,15 +41,40 @@ app.include_router(patients.router)                         # already /api/v1/pa
 app.include_router(consultations.router)                    # already /api/v1/consultations
 app.include_router(router_medecins)
 app.include_router(router_communautes)
-app.include_router(router_aides,       prefix="/api/v1")
-app.include_router(ressources.router,  prefix="/api/v1")   # /ressources → /api/v1/ressources
-app.include_router(router_monitoring)                       # already /api/v1/monitoring
+app.include_router(router_aides,             prefix="/api/v1")
+app.include_router(ressources.router,        prefix="/api/v1")
+app.include_router(router_monitoring)
+app.include_router(router_messages_equipe,   prefix="/api/v1")   # /equipe → /api/v1/equipe
+app.include_router(router_publications,      prefix="/api/v1")   # /publications → /api/v1/publications
+app.include_router(router_questions_admin,  prefix="/api/v1")   # /questions-admin → /api/v1/questions-admin
+app.include_router(router_notifications,   prefix="/api/v1")   # /notifications   → /api/v1/notifications
 
 
 @app.on_event("startup")
 async def startup():
+    from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        for sql in [
+            "ALTER TABLE aides_soignants ADD COLUMN IF NOT EXISTS preferences JSONB DEFAULT '{}'",
+            "ALTER TABLE medecins        ADD COLUMN IF NOT EXISTS preferences JSONB DEFAULT '{}'",
+        ]:
+            await conn.execute(text(sql))
+
+    # ALTER TYPE ADD VALUE doit tourner en dehors d'une transaction (autocommit)
+    async with engine.connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        await conn.execute(text("""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_enum
+                    WHERE enumlabel = 'aide_soignant'
+                    AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'type_destinataire')
+                ) THEN
+                    ALTER TYPE type_destinataire ADD VALUE 'aide_soignant';
+                END IF;
+            END $$
+        """))
 
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as db:

@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from jose import JWTError
 
@@ -76,38 +77,42 @@ async def lister_ressources(
     limite:     int           = Query(9, ge=1, le=50),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(RessourceMedicale).where(RessourceMedicale.publie == True)
-
+    base_filter = [RessourceMedicale.publie == True]
     if pathologie:
-        stmt = stmt.where(RessourceMedicale.pathologie == pathologie)
+        base_filter.append(RessourceMedicale.pathologie == pathologie)
     if niveau:
-        stmt = stmt.where(RessourceMedicale.niveau == niveau)
+        base_filter.append(RessourceMedicale.niveau == niveau)
     if recherche:
-        stmt = stmt.where(
+        base_filter.append(
             RessourceMedicale.titre.ilike(f"%{recherche}%") |
             RessourceMedicale.resume.ilike(f"%{recherche}%")
         )
 
-    stmt = stmt.order_by(RessourceMedicale.created_at.desc())
+    count_result = await db.execute(select(RessourceMedicale).where(*base_filter))
+    total = len(count_result.scalars().all())
 
-    # Compter le total
-    count_stmt = select(RessourceMedicale).where(RessourceMedicale.publie == True)
-    if pathologie:
-        count_stmt = count_stmt.where(RessourceMedicale.pathologie == pathologie)
-    if niveau:
-        count_stmt = count_stmt.where(RessourceMedicale.niveau == niveau)
-    if recherche:
-        count_stmt = count_stmt.where(
-            RessourceMedicale.titre.ilike(f"%{recherche}%") |
-            RessourceMedicale.resume.ilike(f"%{recherche}%")
-        )
-    total_result = await db.execute(count_stmt)
-    total = len(total_result.scalars().all())
-
-    # Pagination
-    stmt = stmt.offset((page - 1) * limite).limit(limite)
+    stmt = (
+        select(RessourceMedicale)
+        .where(*base_filter)
+        .options(selectinload(RessourceMedicale.medecin))
+        .order_by(RessourceMedicale.created_at.desc())
+        .offset((page - 1) * limite)
+        .limit(limite)
+    )
     result = await db.execute(stmt)
     ressources = result.scalars().all()
+
+    def _author(r):
+        m = r.medecin
+        if not m:
+            return {"name": "Dr. Inconnu", "avatar": "?", "specialty": "", "hospital": ""}
+        initials = ((m.prenom or "?")[0] + (m.nom or "?")[0]).upper()
+        return {
+            "name":     f"Dr. {m.prenom} {m.nom}",
+            "avatar":   initials,
+            "specialty": m.specialite or "Médecin",
+            "hospital":  m.etablissement or "",
+        }
 
     return {
         "total":    total,
@@ -116,17 +121,25 @@ async def lister_ressources(
         "pages":    (total + limite - 1) // limite,
         "data": [
             {
-                "id":         r.id,
-                "titre":      r.titre,
-                "resume":     r.resume,
-                "pathologie": r.pathologie,
-                "tags":       r.tags,
-                "niveau":     r.niveau,
-                "has_pdf":    r.pdf_url is not None,
-                "nb_vues":           r.nb_vues,
+                "id":          r.id,
+                "casTitle":    r.titre,
+                "casId":       r.id,
+                "titre":       r.titre,
+                "text":        r.resume or "",
+                "author":      _author(r),
+                "pathologie":  r.pathologie,
+                "tags":        r.tags or [],
+                "niveau":      r.niveau,
+                "has_pdf":     r.pdf_url is not None,
+                "nb_vues":     r.nb_vues,
                 "nb_telechargements": r.nb_telechargements,
-                "medecin_id": r.medecin_id,
-                "created_at": r.created_at.isoformat(),
+                "medecin_id":  r.medecin_id,
+                "time":        r.created_at.isoformat(),
+                "likes":       0,
+                "liked":       False,
+                "pinned":      False,
+                "type":        "feedback",
+                "replies":     [],
             }
             for r in ressources
         ]
