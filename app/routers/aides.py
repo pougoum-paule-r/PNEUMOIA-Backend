@@ -1,4 +1,5 @@
 # app/routers/aides.py
+import asyncio
 import random, string, logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -116,7 +117,7 @@ async def get_medecin_from_token(
     return medecin
 
 
-def _send_email(to: str, subject: str, html: str, aide: "AideSoignant | None" = None):
+async def _send_email(to: str, subject: str, html: str, aide: "AideSoignant | None" = None):
     """Envoie un email si notif_email n'est pas désactivé dans les préférences aide."""
     if aide is not None:
         prefs = aide.preferences or {}
@@ -124,13 +125,10 @@ def _send_email(to: str, subject: str, html: str, aide: "AideSoignant | None" = 
             logger.warning("Email non envoyé à %s : notif_email désactivé", to)
             return
     try:
-        print(f"[EMAIL] Tentative envoi → {to}", flush=True)
-        smtp_send(to, subject, html)
-        print(f"[EMAIL] Succès → {to}", flush=True)
+        await smtp_send(to, subject, html)
+        logger.info("Email envoyé → %s", to)
     except Exception as e:
-        import traceback
-        print(f"[EMAIL] ERREUR → {to} : {e}", flush=True)
-        traceback.print_exc()
+        logger.warning("Email non envoyé → %s : %s", to, e)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -197,7 +195,7 @@ async def inscription_aide(body: InscriptionAideRequest, db: AsyncSession = Depe
     )
     await db.commit()
 
-    _send_email(
+    asyncio.create_task(_send_email(
         to      = medecin.email,
         subject = "👥 PneumoIA — Nouvel aide soignant",
         html    = f"""
@@ -208,7 +206,7 @@ async def inscription_aide(body: InscriptionAideRequest, db: AsyncSession = Depe
           <p>Connectez-vous à PneumoIA pour valider ou refuser cette demande.</p>
         </div>
         """
-    )
+    ))
 
     return {
         "message": f"Demande envoyée à {medecin.civilite or 'Dr'} {medecin.nom}. "
@@ -395,7 +393,7 @@ async def valider_aide(
     await db.commit()
 
     frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
-    _send_email(
+    asyncio.create_task(_send_email(
         to      = aide.email,
         subject = "✅ PneumoIA — Votre compte aide soignant est activé",
         html    = f"""
@@ -411,7 +409,7 @@ async def valider_aide(
         </div>
         """,
         aide    = aide,
-    )
+    ))
 
     return {"message": f"{aide.prenom} {aide.nom} validé avec succès"}
 
@@ -441,7 +439,7 @@ async def refuser_aide(
     await db.commit()
 
     motif_html = f"<p><strong>Motif :</strong> {body.motif}</p>" if body.motif else ""
-    _send_email(
+    asyncio.create_task(_send_email(
         to      = aide.email,
         subject = "❌ PneumoIA — Demande de rejoindre une équipe refusée",
         html    = f"""
@@ -455,7 +453,7 @@ async def refuser_aide(
         </div>
         """,
         aide    = aide,
-    )
+    ))
 
     return {"message": f"Demande de {aide.prenom} {aide.nom} refusée"}
 
@@ -590,7 +588,7 @@ async def regenerer_code(
     await db.commit()
 
     for aide in aides_actifs:
-        _send_email(
+        asyncio.create_task(_send_email(
             to      = aide.email,
             subject = "🔄 PneumoIA — Code référent mis à jour",
             html    = f"""
@@ -602,7 +600,7 @@ async def regenerer_code(
             </div>
             """,
             aide    = aide,
-        )
+        ))
 
     return {
         "message":       "Code référent régénéré avec succès",

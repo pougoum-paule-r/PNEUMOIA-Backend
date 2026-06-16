@@ -1,65 +1,68 @@
 import asyncio
 import logging
 import smtplib
-import urllib.request
-import json as _json
-from email.mime.text        import MIMEText
-from email.mime.multipart   import MIMEMultipart
-from datetime               import datetime, timedelta
-from app.config             import settings
+from datetime import datetime, timedelta
+from email.mime.text      import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+import httpx
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-def _send_via_api(to_email: str, subject: str, html: str) -> None:
-    """Envoie via l'API HTTP Brevo — plus rapide que SMTP (file prioritaire)."""
-    payload = _json.dumps({
+async def _send_via_api(to_email: str, subject: str, html: str) -> None:
+    """Brevo HTTP API — async natif, pas de getaddrinfo thread issue."""
+    payload = {
         "sender":      {"name": "PneumoIA", "email": settings.FROM_EMAIL},
         "to":          [{"email": to_email}],
         "subject":     subject,
         "htmlContent": html,
-    }).encode()
-    req = urllib.request.Request(
-        "https://api.brevo.com/v3/smtp/email",
-        data    = payload,
-        headers = {
-            "Content-Type": "application/json",
-            "api-key":      settings.BREVO_API_KEY,
-        },
-        method  = "POST",
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        if resp.status not in (200, 201):
-            raise RuntimeError(f"Brevo API {resp.status}: {resp.read()}")
+    }
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(
+            "https://api.brevo.com/v3/smtp/email",
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "api-key":      settings.BREVO_API_KEY,
+            },
+        )
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"Brevo API {r.status_code}: {r.text}")
 
 
-def _send_via_smtp(to_email: str, subject: str, html: str) -> None:
-    """Envoie via SMTP Brevo — fallback si pas de clé API."""
+def _smtp_send_sync(to_email: str, subject: str, html: str) -> None:
+    """Envoi SMTP synchrone — appelé via asyncio.to_thread."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = settings.FROM_EMAIL
     msg["To"]      = to_email
     msg.attach(MIMEText(html, "html"))
 
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-        server.sendmail(settings.FROM_EMAIL, to_email, msg.as_string())
-
-
-def _send(to_email: str, subject: str, html: str) -> None:
-    """Envoie un email HTML. Utilise l'API Brevo si BREVO_API_KEY est défini, sinon SMTP."""
-    if settings.BREVO_API_KEY:
-        _send_via_api(to_email, subject, html)
+    if settings.SMTP_PORT == 465:
+        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.FROM_EMAIL, to_email, msg.as_string())
     else:
-        _send_via_smtp(to_email, subject, html)
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.FROM_EMAIL, to_email, msg.as_string())
 
 
-async def _send_async(to_email: str, subject: str, html: str) -> None:
-    """Wrapper non-bloquant — exécute _send dans un thread pool."""
-    await asyncio.to_thread(_send, to_email, subject, html)
+async def _send_via_smtp(to_email: str, subject: str, html: str) -> None:
+    await asyncio.to_thread(_smtp_send_sync, to_email, subject, html)
+
+
+async def _send(to_email: str, subject: str, html: str) -> None:
+    if settings.BREVO_API_KEY:
+        await _send_via_api(to_email, subject, html)
+    else:
+        await _send_via_smtp(to_email, subject, html)
 
 
 # ─── Email de validation du compte ───────────────────────────────────────────
@@ -67,7 +70,7 @@ async def send_activation_email(to_email: str, nom: str, token: str) -> None:
     lien   = f"{settings.FRONTEND_URL}/activation?token={token}"
     expiry = (datetime.utcnow() + timedelta(days=7)).strftime("%d/%m/%Y")
 
-    await _send_async(
+    await _send(
         to_email = to_email,
         subject  = "PneumoIA — Votre compte a été validé ✅",
         html     = f"""
@@ -92,7 +95,7 @@ async def send_activation_email(to_email: str, nom: str, token: str) -> None:
 
 # ─── Email de rejet du dossier ───────────────────────────────────────────────
 async def send_rejection_email(to_email: str, nom: str, motif: str) -> None:
-    await _send_async(
+    await _send(
         to_email = to_email,
         subject  = "PneumoIA — Demande d'inscription refusée",
         html     = f"""
@@ -112,7 +115,7 @@ async def send_rejection_email(to_email: str, nom: str, motif: str) -> None:
 
 # ─── Email OTP (code de connexion) ───────────────────────────────────────────
 async def send_otp_email(to_email: str, nom: str, otp: str) -> None:
-    await _send_async(
+    await _send(
         to_email = to_email,
         subject  = "PneumoIA — Votre code de connexion",
         html     = f"""
@@ -134,7 +137,7 @@ async def send_otp_email(to_email: str, nom: str, otp: str) -> None:
 
 # ─── Email OTP reset de mot de passe ─────────────────────────────────────────
 async def send_reset_otp_email(to_email: str, nom: str, otp: str) -> None:
-    await _send_async(
+    await _send(
         to_email = to_email,
         subject  = "PneumoIA — Code de réinitialisation de mot de passe",
         html     = f"""
@@ -164,7 +167,7 @@ async def send_piratage_admin_email(
     medecin_id: str, nb_tentatives: int,
 ) -> None:
     now = datetime.utcnow().strftime("%d/%m/%Y à %H:%M UTC")
-    await _send_async(
+    await _send(
         to_email = admin_email,
         subject  = "🚨 PneumoIA — Tentative de piratage de compte détectée",
         html     = f"""
@@ -200,7 +203,7 @@ async def send_piratage_admin_email(
 # ─── Alerte piratage → Médecin ───────────────────────────────────────────────
 async def send_piratage_medecin_email(to_email: str, nom: str) -> None:
     now = datetime.utcnow().strftime("%d/%m/%Y à %H:%M UTC")
-    await _send_async(
+    await _send(
         to_email = to_email,
         subject  = "🚨 PneumoIA — Activité suspecte sur votre compte",
         html     = f"""
@@ -214,7 +217,7 @@ async def send_piratage_medecin_email(to_email: str, nom: str) -> None:
           </div>
           <p style="color:#374151">Bonjour Dr {nom},</p>
           <p style="color:#374151">
-            Le <strong>{now}</strong>, quelqu'un a tenté 3 fois de réinitialiser
+            Le <strong>{now}</strong>, quelqu'on a tenté 3 fois de réinitialiser
             le mot de passe de votre compte sans succès.
           </p>
           <p style="color:#dc2626;font-weight:bold">
