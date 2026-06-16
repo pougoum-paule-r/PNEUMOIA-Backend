@@ -16,12 +16,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('patients',
-        sa.Column('deleted_at', sa.DateTime(), nullable=True, default=None)
-    )
-    op.add_column('patients',
-        sa.Column('deleted_by', sa.String(15), sa.ForeignKey('medecins.id', ondelete='SET NULL'), nullable=True)
-    )
+    conn = op.get_bind()
+    conn.execute(sa.text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP"))
+    conn.execute(sa.text(
+        "ALTER TABLE patients ADD COLUMN IF NOT EXISTS deleted_by VARCHAR(15) "
+        "REFERENCES medecins(id) ON DELETE SET NULL"
+    ))
 
 
 def downgrade() -> None:

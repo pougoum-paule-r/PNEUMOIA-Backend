@@ -33,11 +33,12 @@ class Medecin(Base):
     photo_url     = Column(String(500), nullable=True)
     telephone     = Column(String(30),  nullable=True)
     adresse       = Column(String(300), nullable=True)
+    ville         = Column(String(100), nullable=True)
     bio           = Column(Text,        nullable=True)
     linkedin      = Column(String(300), nullable=True)
     website       = Column(String(300), nullable=True)
     statut        = Column(
-        Enum("en_attente", "valide", "rejete", "suspendu", name="statut_medecin"),
+        Enum("en_attente", "valide", "rejete", "suspendu", "corbeille", name="statut_medecin"),
         nullable=False,
         default="en_attente",
     )
@@ -50,10 +51,29 @@ class Medecin(Base):
     code_referent_actif = Column(Boolean,     nullable=False, default=True)
     preferences         = Column(JSONB,       nullable=True,  server_default='{}')
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
+    updated_at = Column(DateTime, nullable=True,  onupdate=lambda: datetime.utcnow())
 
+    # ── Suspension ────────────────────────────────────────────────────
+    suspension_raison = Column(Text,        nullable=True)
+    suspension_duree  = Column(String(50),  nullable=True)
+    suspension_par    = Column(String(15),  ForeignKey("admins.id", ondelete="SET NULL"), nullable=True)
+    suspension_le     = Column(DateTime,    nullable=True)
+
+    # ── Refus ─────────────────────────────────────────────────────────
+    rejete_par = Column(String(15), ForeignKey("admins.id", ondelete="SET NULL"), nullable=True)
+
+    # ── Corbeille (soft delete) ──────────────────────────────────────
+    statut_precedent = Column(String(20),  nullable=True)
+    supprime_le      = Column(DateTime,    nullable=True)
+    supprime_par     = Column(String(15),  ForeignKey("admins.id", ondelete="SET NULL"), nullable=True)
+
+    # ── Relance après refus ──────────────────────────────────────────
+    relance_sent = Column(Boolean,  nullable=False, default=False)
+    relance_at   = Column(DateTime, nullable=True)
 
     # Relations
     valideur           = relationship("Admin",            back_populates="medecins_valides", foreign_keys=[valide_par])
+    rejeteur            = relationship("Admin",           foreign_keys=[rejete_par])
     documents          = relationship("DocumentMedecin",  back_populates="medecin",    cascade="all, delete-orphan")
     patients_crees     = relationship("Patient",          back_populates="createur",   foreign_keys="Patient.created_by")
     consultations      = relationship("Consultation",     back_populates="medecin",    foreign_keys="Consultation.medecin_id")

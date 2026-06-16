@@ -16,11 +16,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('patients',
-        sa.Column('aide_id', sa.String(15),
-                  sa.ForeignKey('aides_soignants.id', ondelete='SET NULL'),
-                  nullable=True)
-    )
+    op.get_bind().execute(sa.text(
+        "ALTER TABLE patients ADD COLUMN IF NOT EXISTS aide_id VARCHAR(15) "
+        "REFERENCES aides_soignants(id) ON DELETE SET NULL"
+    ))
 
 
 def downgrade() -> None:

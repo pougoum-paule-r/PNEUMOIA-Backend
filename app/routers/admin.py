@@ -8,16 +8,17 @@ Organisation :
    4.  Refusées                    → liste, supprimer, relancer
    5.  Médecins actifs             → liste enrichie avec stats
    6.  Médecin par ID              → profil complet + documents
-   7.  Actions médecins            → suspendre, réactiver, supprimer (→ corbeille)
-   8.  Médecins par statut         → endpoint générique
-   9.  FAQ — questions             → liste, répondre
-   10. FAQ — publiées              → CRUD admin
-   11. Statistiques                → consultations, répartition géo, KPIs, top médecins
-   12. Paramètres                  → get, update
-   13. Notifications               → liste, marquer lue, tout lire
-   14. Journal d'audit             → liste, purger
-   15. Corbeille                   → liste, restaurer, supprimer définitivement
-   16. Avis / commentaires         → liste, supprimer, marquer vus
+   7.  Documents médecins          → valider, rejeter (email au médecin)
+   8.  Actions médecins            → suspendre, réactiver, supprimer (→ corbeille)
+   9.  Médecins par statut         → endpoint générique
+   10. FAQ — questions             → liste, répondre
+   11. FAQ — publiées              → CRUD admin
+   12. Statistiques                → consultations, répartition géo, KPIs, top médecins
+   13. Paramètres                  → get, update
+   14. Notifications               → liste, marquer lue, tout lire
+   15. Journal d'audit             → liste, purger
+   16. Corbeille                   → liste, restaurer, supprimer définitivement
+   17. Avis / commentaires         → liste, supprimer, marquer vus
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -137,7 +138,7 @@ async def valider_medecin(
 ):
     """
     Valide un médecin — statut passe à 'valide'.
-    Génère un lien d'activation + email Brevo.
+    Génère un lien d'activation + email SMTP envoyé au médecin.
     POST /api/admin/demandes/{id}/valider
     """
     return await AdminService.valider_medecin(db, medecin_id, admin.id)
@@ -152,10 +153,10 @@ async def rejeter_medecin(
 ):
     """
     Refuse un médecin — statut passe à 'rejete'.
-    Email de refus avec motif envoyé via Brevo.
+    Email de refus avec motif envoyé via SMTP au médecin.
     POST /api/admin/demandes/{id}/rejeter
     """
-    return await AdminService.rejeter_medecin(db, medecin_id, body.motif)
+    return await AdminService.rejeter_medecin(db, medecin_id, body.motif, admin.id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,7 +216,7 @@ async def relancer_medecin(
     admin: Admin = Depends(get_current_admin),
 ):
     """
-    Envoie un e-mail de relance au médecin refusé via Brevo.
+    Envoie un e-mail de relance au médecin refusé via SMTP.
     POST /api/admin/demandes/{id}/relancer
     Body: { "message": "..." }
     """
@@ -261,7 +262,44 @@ async def get_medecin_by_id(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. ACTIONS SUR LES MÉDECINS
+# 7. VALIDATION / REJET DE DOCUMENTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/documents/{document_id}/valider")
+async def valider_document(
+    document_id: str,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Valide un document médecin — statut passe à 'valide'.
+    Email de notification envoyé au médecin via SMTP.
+    POST /api/admin/documents/{id}/valider
+    """
+    return await AdminService.valider_document(db, document_id, admin.id)
+
+
+@router.post("/documents/{document_id}/rejeter")
+async def rejeter_document(
+    document_id: str,
+    body:  dict,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Rejette un document médecin avec un motif — statut passe à 'rejete'.
+    Email de notification envoyé au médecin via SMTP.
+    POST /api/admin/documents/{id}/rejeter
+    Body: { "motif": "..." }
+    """
+    motif = body.get("motif", "").strip()
+    if not motif:
+        raise HTTPException(400, "Un motif de rejet est obligatoire.")
+    return await AdminService.rejeter_document(db, document_id, motif, admin.id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. ACTIONS SUR LES MÉDECINS
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/medecins/{medecin_id}/suspendre")
@@ -273,7 +311,7 @@ async def suspendre_medecin(
 ):
     """
     Suspend un médecin — statut passe à 'suspendu'.
-    Email de notification envoyé via Brevo avec raison + durée.
+    Email de notification envoyé au médecin (SMTP) avec raison + durée.
     POST /api/admin/medecins/{id}/suspendre
     Body: { raison, duree, message }
     """
@@ -360,7 +398,7 @@ async def repondre_question(
     admin: Admin        = Depends(get_current_admin),
 ):
     """
-    Répond à une question de médecin. Email envoyé via Brevo.
+    Répond à une question de médecin.
     POST /api/admin/faq/questions/{id}/repondre
     Body: { "reponse": "..." }
     """

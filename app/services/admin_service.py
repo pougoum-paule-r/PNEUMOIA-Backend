@@ -37,12 +37,40 @@ import secrets
 import calendar
 import uuid
 
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 from app.models.admin import Admin
 from app.models.medecin import Medecin
 from app.models.document_medecin import DocumentMedecin
 from app.core.security import hash_password
 from app.config import settings
 from app.services.audit_helper import log_admin_action
+from app.models.consultation import Consultation
+
+
+async def _send_email_smtp(to_email: str, to_name: str, subject: str, html: str) -> bool:
+    """Envoie un email HTML via SMTP configuré dans .env. Retourne True si succès."""
+    import aiosmtplib
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = f"PneumoIA <{settings.FROM_EMAIL}>"
+    msg["To"]      = f"{to_name} <{to_email}>"
+    msg.attach(MIMEText(html, "html", "utf-8"))
+
+    try:
+        await aiosmtplib.send(
+            msg,
+            hostname=settings.SMTP_HOST,
+            port=settings.SMTP_PORT,
+            username=settings.SMTP_USER,
+            password=settings.SMTP_PASSWORD,
+            start_tls=True,
+        )
+        return True
+    except Exception:
+        return False
 
 # ── Modèles à adapter selon votre projet ─────────────────────────────────────
 # from app.models.consultation import Consultation
@@ -74,14 +102,16 @@ def build_url(path: str | None) -> str | None:
 
 def format_document(d: DocumentMedecin) -> dict:
     return {
-        "id":          d.id,
-        "type":        d.type_document,
-        "label":       LABELS_DOCUMENT.get(d.type_document, d.type_document),
-        "url":         build_url(d.url_fichier),
-        "nom_fichier": d.nom_fichier,
-        "mime_type":   d.mime_type,
-        "taille_ko":   round(d.taille_octets / 1024) if d.taille_octets else None,
-        "created_at":  d.created_at.isoformat() if d.created_at else None,
+        "id":           d.id,
+        "type":         d.type_document,
+        "label":        LABELS_DOCUMENT.get(d.type_document, d.type_document),
+        "url":          build_url(d.url_fichier),
+        "nom_fichier":  d.nom_fichier,
+        "mime_type":    d.mime_type,
+        "taille_ko":    round(d.taille_octets / 1024) if d.taille_octets else None,
+        "statut":       getattr(d, "statut", "en_attente"),
+        "motif_rejet":  getattr(d, "motif_rejet", None),
+        "created_at":   d.created_at.isoformat() if d.created_at else None,
     }
 
 def format_medecin(m: Medecin) -> dict:
@@ -97,6 +127,7 @@ def format_medecin(m: Medecin) -> dict:
         "etablissement": m.etablissement,
         "telephone":     m.telephone,
         "adresse":       m.adresse,
+        "ville":         m.ville,
         "bio":           m.bio,
         "linkedin":      m.linkedin,
         "website":       m.website,
@@ -178,20 +209,65 @@ class AdminService:
     @staticmethod
     async def get_medecins_actifs(db: AsyncSession) -> list[dict]:
         """Retourne les médecins validés enrichis avec leurs stats d'activité."""
+        from app.models.consultation import Consultation
+
         result = await db.execute(
             select(Medecin)
             .where(Medecin.statut == "valide")
             .options(
-                selectinload(Medecin.consultations).selectinload("diagnostic"),
+                selectinload(Medecin.consultations).selectinload(Consultation.diagnostic),
                 selectinload(Medecin.cas_cliniques),
                 selectinload(Medecin.valideur),
             )
             .order_by(Medecin.valide_le.desc())
         )
-        return [AdminService._format_medecin_actif(m) for m in result.scalars().all()]
+        medecins   = result.scalars().all()
+        classement = AdminService._classer_medecins(medecins)
+        return [
+            AdminService._format_medecin_actif(m, rang_communaute=classement.get(m.id, "—"))
+            for m in medecins
+        ]
 
     @staticmethod
-    def _format_medecin_actif(m: Medecin) -> dict:
+    def _classer_medecins(medecins: list[Medecin]) -> dict[str, str]:
+        """
+        Classe une liste de médecins selon un score combiné :
+        50% concordance IA moyenne (30 dernières consultations) + 50% nombre de consultations,
+        chaque critère normalisé entre 0 et 1 par rapport au max du groupe.
+        Retourne { medecin_id: "#rang/total" }.
+        """
+        stats = []
+        for md in medecins:
+            consultations = md.consultations or []
+            scores = []
+            for c in sorted(consultations, key=lambda x: x.created_at or datetime.min, reverse=True)[:30]:
+                if c.diagnostic and c.diagnostic.maladies:
+                    maladies = c.diagnostic.maladies
+                    if isinstance(maladies, list) and maladies:
+                        pct = maladies[0].get("pct")
+                        if pct is not None:
+                            scores.append(float(pct))
+            concordance = sum(scores) / len(scores) if scores else 0.0
+            stats.append({"id": md.id, "concordance": concordance, "nb_consultations": len(consultations)})
+
+        if not stats:
+            return {}
+
+        max_concordance = max(s["concordance"]       for s in stats) or 1.0
+        max_consult     = max(s["nb_consultations"]   for s in stats) or 1
+
+        for s in stats:
+            norm_concordance = s["concordance"]       / max_concordance
+            norm_consult     = s["nb_consultations"]  / max_consult
+            s["score"] = 0.5 * norm_concordance + 0.5 * norm_consult
+
+        stats.sort(key=lambda s: s["score"], reverse=True)
+
+        total = len(stats)
+        return {s["id"]: f"#{i}/{total}" for i, s in enumerate(stats, start=1)}
+
+    @staticmethod
+    def _format_medecin_actif(m: Medecin, rang_communaute: str | None = None) -> dict:
         """
         Formate un médecin avec ses stats pour MedecinsActifs et ProfilMedecin.
         - concordance IA  → DiagnosticIA.maladies[0]["pct"] (30 dernières consultations)
@@ -252,10 +328,11 @@ class AdminService:
             "derniere_activite": derniere_activite,
             "nb_cas_partages":  nb_partages,
             "nb_cas_cliniques": nb_cas,
-            "rang_communaute":  f"#{nb_cas}/38" if nb_cas else "—",
-            "cas_partages":     f"{nb_cas} cas publiés",
+            "rang_communaute":  rang_communaute or "—",
+            "cas_partages":     f"{nb_partages} cas partagés",
             "activite_recente": activite_recente,
         }
+
 
     # ─────────────────────────────────────────────────────────────────────────
     # 6. PROFIL MÉDECIN PAR ID
@@ -264,12 +341,14 @@ class AdminService:
     @staticmethod
     async def get_medecin_by_id(db: AsyncSession, medecin_id: str) -> dict:
         """Retourne le profil complet d'un médecin avec stats + documents."""
+        from app.models.consultation import Consultation
+
         result = await db.execute(
             select(Medecin)
             .where(Medecin.id == medecin_id)
             .options(
                 selectinload(Medecin.documents),
-                selectinload(Medecin.consultations).selectinload("diagnostic"),
+                selectinload(Medecin.consultations).selectinload(Consultation.diagnostic),
                 selectinload(Medecin.cas_cliniques),
                 selectinload(Medecin.valideur),
             )
@@ -278,17 +357,117 @@ class AdminService:
         if not medecin:
             raise HTTPException(status_code=404, detail="Médecin introuvable.")
 
-        data = AdminService._format_medecin_actif(medecin)
+        # Classement calculé par rapport à tous les médecins validés (pas seulement celui-ci)
+        result_tous = await db.execute(
+            select(Medecin)
+            .where(Medecin.statut == "valide")
+            .options(selectinload(Medecin.consultations).selectinload(Consultation.diagnostic))
+        )
+        classement = AdminService._classer_medecins(result_tous.scalars().all())
+
+        data = AdminService._format_medecin_actif(medecin, rang_communaute=classement.get(medecin.id, "—"))
         data["documents"] = [format_document(d) for d in medecin.documents]
         return data
 
+
     # ─────────────────────────────────────────────────────────────────────────
-    # 7. VALIDER UN MÉDECIN
+    # 7. VALIDER / REJETER UN DOCUMENT
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    async def valider_document(db: AsyncSession, document_id: str, admin_id: str) -> dict:
+        """Valide un document médecin + notifie le médecin par email."""
+        result = await db.execute(
+            select(DocumentMedecin)
+            .where(DocumentMedecin.id == document_id)
+            .options(selectinload(DocumentMedecin.medecin))
+        )
+        doc = result.scalar_one_or_none()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document introuvable.")
+
+        doc.statut      = "valide"
+        doc.motif_rejet = None
+        await db.commit()
+
+        medecin = doc.medecin
+        label   = LABELS_DOCUMENT.get(doc.type_document, doc.type_document)
+
+        await _send_email_smtp(
+            to_email=medecin.email,
+            to_name=f"{medecin.prenom} {medecin.nom}",
+            subject=f"Document validé — {label}",
+            html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
+                  <h2 style="color:#0f766e">PneumoIA — Document validé</h2>
+                  <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
+                  <p>Votre document <strong>{label}</strong> a été <strong style="color:#0f766e">validé</strong> par l'administration.</p>
+                  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:16px 0">
+                    <p style="margin:0;color:#065f46">Fichier : {doc.nom_fichier or label}</p>
+                  </div>
+                  <p>Connectez-vous à la plateforme pour suivre l'avancement de votre dossier.</p>
+                </div>
+            """,
+        )
+
+        await log_admin_action(db, admin_id, "document_valide",
+            medecin_id=medecin.id,
+            details={"document_id": document_id, "type": doc.type_document})
+
+        return {"message": f"Document '{label}' validé. Médecin notifié.", "statut": "valide"}
+
+    @staticmethod
+    async def rejeter_document(
+        db: AsyncSession, document_id: str, motif: str, admin_id: str
+    ) -> dict:
+        """Rejette un document médecin avec un motif + notifie le médecin par email."""
+        result = await db.execute(
+            select(DocumentMedecin)
+            .where(DocumentMedecin.id == document_id)
+            .options(selectinload(DocumentMedecin.medecin))
+        )
+        doc = result.scalar_one_or_none()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document introuvable.")
+
+        doc.statut      = "rejete"
+        doc.motif_rejet = motif
+        await db.commit()
+
+        medecin = doc.medecin
+        label   = LABELS_DOCUMENT.get(doc.type_document, doc.type_document)
+
+        await _send_email_smtp(
+            to_email=medecin.email,
+            to_name=f"{medecin.prenom} {medecin.nom}",
+            subject=f"Document refusé — {label}",
+            html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
+                  <h2 style="color:#dc2626">PneumoIA — Document refusé</h2>
+                  <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
+                  <p>Votre document <strong>{label}</strong> n'a pas été accepté.</p>
+                  <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:16px;margin:16px 0">
+                    <p style="margin:0;color:#dc2626"><strong>Motif :</strong> {motif}</p>
+                    <p style="margin:8px 0 0;color:#991b1b">Fichier : {doc.nom_fichier or label}</p>
+                  </div>
+                  <p>Veuillez soumettre un nouveau document conforme depuis votre espace personnel.</p>
+                </div>
+            """,
+        )
+
+        await log_admin_action(db, admin_id, "document_rejete",
+            medecin_id=medecin.id,
+            details={"document_id": document_id, "type": doc.type_document, "motif": motif})
+
+        return {"message": f"Document '{label}' refusé. Médecin notifié.", "statut": "rejete"}
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 8. VALIDER UN MÉDECIN
     # ─────────────────────────────────────────────────────────────────────────
 
     @staticmethod
     async def valider_medecin(db: AsyncSession, medecin_id: str, admin_id: str) -> dict:
-        """Valide un médecin — statut passe à 'valide' + email d'activation Brevo."""
+        """Valide un médecin — statut passe à 'valide' + email d'activation envoyé au médecin."""
         result  = await db.execute(select(Medecin).where(Medecin.id == medecin_id))
         medecin = result.scalar_one_or_none()
 
@@ -307,39 +486,25 @@ class AdminService:
 
         lien = f"{settings.FRONTEND_URL}/medecin/activer?token={token}"
 
-        # Email d'activation via Brevo
-        email_envoye = False
-        try:
-            import httpx
-            brevo_payload = {
-                "sender": {"name": "PneumoIA", "email": settings.ADMIN_EMAIL},
-                "to":     [{"email": medecin.email, "name": f"{medecin.prenom} {medecin.nom}"}],
-                "subject": "Votre compte PneumoIA a été validé — Activez votre accès",
-                "htmlContent": f"""
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
-                      <h2 style="color:#0f766e">PneumoIA — Compte validé !</h2>
-                      <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
-                      <p>Votre demande d'inscription a été <strong>validée</strong> par l'administration.</p>
-                      <div style="margin:24px 0">
-                        <a href="{lien}"
-                           style="background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">
-                          Activer mon compte
-                        </a>
-                      </div>
-                      <p style="color:#6b7280;font-size:12px">Ce lien est valable 7 jours.</p>
-                    </div>
-                """,
-            }
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "https://api.brevo.com/v3/smtp/email",
-                    json=brevo_payload,
-                    headers={"api-key": settings.BREVO_API_KEY, "Content-Type": "application/json"},
-                    timeout=10,
-                )
-                email_envoye = resp.status_code in (200, 201)
-        except Exception:
-            pass
+        email_envoye = await _send_email_smtp(
+            to_email=medecin.email,
+            to_name=f"{medecin.prenom} {medecin.nom}",
+            subject="Votre compte PneumoIA a été validé — Activez votre accès",
+            html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
+                  <h2 style="color:#0f766e">PneumoIA — Compte validé !</h2>
+                  <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
+                  <p>Votre demande d'inscription a été <strong>validée</strong> par l'administration.</p>
+                  <div style="margin:24px 0">
+                    <a href="{lien}"
+                       style="background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">
+                      Activer mon compte
+                    </a>
+                  </div>
+                  <p style="color:#6b7280;font-size:12px">Ce lien est valable 7 jours.</p>
+                </div>
+            """,
+        )
 
         await log_admin_action(db, admin_id, "demande_validee", medecin_id=medecin.id,
             details={"medecin_nom": f"{medecin.prenom} {medecin.nom}", "email": medecin.email})
@@ -356,8 +521,8 @@ class AdminService:
     # ─────────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    async def rejeter_medecin(db: AsyncSession, medecin_id: str, motif: str) -> dict:
-        """Refuse un médecin avec un motif + email de refus Brevo."""
+    async def rejeter_medecin(db: AsyncSession, medecin_id: str, motif: str, admin_id: str) -> dict:
+        """Refuse un médecin avec un motif + email de refus envoyé au médecin."""
         result  = await db.execute(select(Medecin).where(Medecin.id == medecin_id))
         medecin = result.scalar_one_or_none()
 
@@ -368,33 +533,27 @@ class AdminService:
 
         medecin.statut      = "rejete"
         medecin.motif_rejet = motif
+        medecin.rejete_par  = admin_id
         await db.commit()
 
-        try:
-            import httpx
-            brevo_payload = {
-                "sender": {"name": "PneumoIA", "email": settings.ADMIN_EMAIL},
-                "to":     [{"email": medecin.email, "name": f"{medecin.prenom} {medecin.nom}"}],
-                "subject": "Votre demande d'inscription PneumoIA n'a pas été retenue",
-                "htmlContent": f"""
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
-                      <h2 style="color:#dc2626">PneumoIA — Demande non retenue</h2>
-                      <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
-                      <p>Votre demande d'inscription n'a pas été retenue pour la raison suivante :</p>
-                      <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:16px;margin:16px 0">
-                        <p style="margin:0;color:#dc2626">{motif}</p>
-                      </div>
-                      <p>Pour toute question, contactez l'administration PneumoIA.</p>
-                    </div>
-                """,
-            }
-            async with httpx.AsyncClient() as client:
-                await client.post("https://api.brevo.com/v3/smtp/email", json=brevo_payload,
-                    headers={"api-key": settings.BREVO_API_KEY, "Content-Type": "application/json"}, timeout=10)
-        except Exception:
-            pass
+        await _send_email_smtp(
+            to_email=medecin.email,
+            to_name=f"{medecin.prenom} {medecin.nom}",
+            subject="Votre demande d'inscription PneumoIA n'a pas été retenue",
+            html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
+                  <h2 style="color:#dc2626">PneumoIA — Demande non retenue</h2>
+                  <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
+                  <p>Votre demande d'inscription n'a pas été retenue pour la raison suivante :</p>
+                  <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:16px;margin:16px 0">
+                    <p style="margin:0;color:#dc2626">{motif}</p>
+                  </div>
+                  <p>Pour toute question, contactez l'administration PneumoIA.</p>
+                </div>
+            """,
+        )
 
-        await log_admin_action(db, "system", "demande_rejetee", medecin_id=medecin.id,
+        await log_admin_action(db, admin_id, "demande_rejetee", medecin_id=medecin.id,
             details={"medecin_nom": f"{medecin.prenom} {medecin.nom}", "motif": motif})
 
         return {"message": "Médecin refusé. Notification envoyée."}
@@ -404,16 +563,40 @@ class AdminService:
     # ─────────────────────────────────────────────────────────────────────────
 
     @staticmethod
+    async def _purger_relances_expirees(db: AsyncSession) -> None:
+        """
+        Supprime définitivement les dossiers refusés dont la relance a été envoyée
+        il y a plus de 48h sans que le médecin n'ait resoumis de nouvelle demande
+        (ce qui se traduirait par un changement de statut, donc disparition du filtre 'rejete').
+        """
+        seuil = datetime.utcnow() - timedelta(hours=48)
+        result = await db.execute(
+            select(Medecin).where(
+                Medecin.statut == "rejete",
+                Medecin.relance_sent == True,  # noqa: E712
+                Medecin.relance_at  != None,   # noqa: E711
+                Medecin.relance_at  < seuil,
+            )
+        )
+        expires = result.scalars().all()
+        for m in expires:
+            await db.delete(m)
+        if expires:
+            await db.commit()
+
+    @staticmethod
     async def get_demandes_refusees(
         db: AsyncSession,
         ville: str | None = None,
         motif: str | None = None,
     ) -> list[dict]:
         """Retourne les dossiers refusés avec filtres optionnels ville/motif."""
+        await AdminService._purger_relances_expirees(db)
+
         query = (
             select(Medecin)
             .where(Medecin.statut == "rejete")
-            .options(selectinload(Medecin.documents))
+            .options(selectinload(Medecin.documents), selectinload(Medecin.rejeteur))
             .order_by(Medecin.updated_at.desc())
         )
         if ville: query = query.where(Medecin.adresse.ilike(f"%{ville}%"))
@@ -425,7 +608,7 @@ class AdminService:
         return [
             {
                 **format_medecin(m),
-                "refuse_par":   m.valide_par or "Administrateur",
+                "refuse_par":   m.rejeteur.email if m.rejeteur else "Administrateur",
                 "date_demande": m.created_at.strftime("%d/%m/%Y") if m.created_at else "—",
                 "date_refus":   m.updated_at.strftime("%d/%m/%Y") if m.updated_at else "—",
                 "relance_sent": getattr(m, "relance_sent", False) or False,
@@ -450,7 +633,7 @@ class AdminService:
 
     @staticmethod
     async def relancer_medecin(db: AsyncSession, medecin_id: str, message: str, admin_id: str) -> dict:
-        """Envoie un e-mail de relance au médecin refusé via Brevo."""
+        """Envoie un e-mail de relance au médecin refusé via SMTP."""
         result  = await db.execute(select(Medecin).where(Medecin.id == medecin_id))
         medecin = result.scalar_one_or_none()
 
@@ -461,12 +644,11 @@ class AdminService:
         if getattr(medecin, "relance_sent", False):
             raise HTTPException(status_code=400, detail="Une relance a déjà été envoyée.")
 
-        import httpx
-        brevo_payload = {
-            "sender": {"name": "PneumoIA", "email": settings.ADMIN_EMAIL},
-            "to":     [{"email": medecin.email, "name": f"{medecin.prenom} {medecin.nom}"}],
-            "subject": "Votre demande d'inscription PneumoIA — Relance",
-            "htmlContent": f"""
+        ok = await _send_email_smtp(
+            to_email=medecin.email,
+            to_name=f"{medecin.prenom} {medecin.nom}",
+            subject="Votre demande d'inscription PneumoIA — Relance",
+            html=f"""
                 <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
                   <h2 style="color:#0f766e">PneumoIA — Relance d'inscription</h2>
                   <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
@@ -480,16 +662,9 @@ class AdminService:
                   <p style="color:#6b7280;font-size:12px">Motif du refus : <em>{medecin.motif_rejet}</em></p>
                 </div>
             """,
-        }
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://api.brevo.com/v3/smtp/email",
-                json=brevo_payload,
-                headers={"api-key": settings.BREVO_API_KEY, "Content-Type": "application/json"},
-                timeout=10,
-            )
-            if resp.status_code not in (200, 201):
-                raise HTTPException(502, f"Échec envoi e-mail Brevo : {resp.text}")
+        )
+        if not ok:
+            raise HTTPException(502, "Échec envoi e-mail SMTP.")
 
         medecin.relance_sent = True
         medecin.relance_at   = datetime.utcnow()
@@ -509,7 +684,7 @@ class AdminService:
         db: AsyncSession, medecin_id: str,
         raison: str, duree: str, message: str, admin_id: str,
     ) -> dict:
-        """Suspend un médecin — statut passe à 'suspendu' + email Brevo."""
+        """Suspend un médecin — statut passe à 'suspendu' + email de notification envoyé au médecin."""
         result  = await db.execute(select(Medecin).where(Medecin.id == medecin_id))
         medecin = result.scalar_one_or_none()
 
@@ -525,31 +700,24 @@ class AdminService:
         medecin.suspension_le     = datetime.utcnow()
         await db.commit()
 
-        try:
-            import httpx
-            brevo_payload = {
-                "sender": {"name": "PneumoIA", "email": settings.ADMIN_EMAIL},
-                "to":     [{"email": medecin.email, "name": f"{medecin.prenom} {medecin.nom}"}],
-                "subject": "Votre accès PneumoIA a été suspendu",
-                "htmlContent": f"""
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
-                      <h2 style="color:#ea580c">PneumoIA — Suspension de compte</h2>
-                      <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
-                      <p>Votre accès a été <strong>suspendu</strong>.</p>
-                      <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:16px;margin:16px 0">
-                        <p style="margin:0;color:#c2410c"><strong>Motif :</strong> {raison}</p>
-                        <p style="margin:8px 0 0;color:#c2410c"><strong>Durée :</strong> {duree}</p>
-                        {f'<p style="margin:8px 0 0;color:#92400e">{message}</p>' if message else ''}
-                      </div>
-                      <p>Pour contester cette décision, contactez l'administration.</p>
-                    </div>
-                """,
-            }
-            async with httpx.AsyncClient() as client:
-                await client.post("https://api.brevo.com/v3/smtp/email", json=brevo_payload,
-                    headers={"api-key": settings.BREVO_API_KEY, "Content-Type": "application/json"}, timeout=10)
-        except Exception:
-            pass
+        await _send_email_smtp(
+            to_email=medecin.email,
+            to_name=f"{medecin.prenom} {medecin.nom}",
+            subject="Votre accès PneumoIA a été suspendu",
+            html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
+                  <h2 style="color:#ea580c">PneumoIA — Suspension de compte</h2>
+                  <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
+                  <p>Votre accès a été <strong>suspendu</strong>.</p>
+                  <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:16px;margin:16px 0">
+                    <p style="margin:0;color:#c2410c"><strong>Motif :</strong> {raison}</p>
+                    <p style="margin:8px 0 0;color:#c2410c"><strong>Durée :</strong> {duree}</p>
+                    {f'<p style="margin:8px 0 0;color:#92400e">{message}</p>' if message else ''}
+                  </div>
+                  <p>Pour contester cette décision, contactez l'administration.</p>
+                </div>
+            """,
+        )
 
         await log_admin_action(db, admin_id, "medecin_suspendu", medecin_id=medecin.id,
             details={"medecin_nom": f"{medecin.prenom} {medecin.nom}", "raison": raison, "duree": duree})
@@ -562,7 +730,7 @@ class AdminService:
 
     @staticmethod
     async def reactiver_medecin(db: AsyncSession, medecin_id: str, admin_id: str) -> dict:
-        """Réactive un médecin suspendu — statut repasse à 'valide' + email Brevo."""
+        """Réactive un médecin suspendu — statut repasse à 'valide' + email de notification envoyé au médecin."""
         result  = await db.execute(select(Medecin).where(Medecin.id == medecin_id))
         medecin = result.scalar_one_or_none()
 
@@ -579,34 +747,27 @@ class AdminService:
         medecin.suspension_le     = None
         await db.commit()
 
-        try:
-            import httpx
-            brevo_payload = {
-                "sender": {"name": "PneumoIA", "email": settings.ADMIN_EMAIL},
-                "to":     [{"email": medecin.email, "name": f"{medecin.prenom} {medecin.nom}"}],
-                "subject": "Votre compte PneumoIA a été réactivé",
-                "htmlContent": f"""
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
-                      <h2 style="color:#0f766e">PneumoIA — Réactivation de compte</h2>
-                      <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
-                      <p>Votre accès a été <strong>réactivé</strong> par l'administration.</p>
-                      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:16px 0">
-                        <p style="margin:0;color:#065f46"><strong>Motif initial de la suspension :</strong> {raison_initiale}</p>
-                      </div>
-                      <div style="margin:24px 0">
-                        <a href="{settings.FRONTEND_URL}/connexion"
-                           style="background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">
-                          Se connecter
-                        </a>
-                      </div>
-                    </div>
-                """,
-            }
-            async with httpx.AsyncClient() as client:
-                await client.post("https://api.brevo.com/v3/smtp/email", json=brevo_payload,
-                    headers={"api-key": settings.BREVO_API_KEY, "Content-Type": "application/json"}, timeout=10)
-        except Exception:
-            pass
+        await _send_email_smtp(
+            to_email=medecin.email,
+            to_name=f"{medecin.prenom} {medecin.nom}",
+            subject="Votre compte PneumoIA a été réactivé",
+            html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
+                  <h2 style="color:#0f766e">PneumoIA — Réactivation de compte</h2>
+                  <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
+                  <p>Votre accès a été <strong>réactivé</strong> par l'administration.</p>
+                  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:16px 0">
+                    <p style="margin:0;color:#065f46"><strong>Motif initial de la suspension :</strong> {raison_initiale}</p>
+                  </div>
+                  <div style="margin:24px 0">
+                    <a href="{settings.FRONTEND_URL}/connexion"
+                       style="background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">
+                      Se connecter
+                    </a>
+                  </div>
+                </div>
+            """,
+        )
 
         await log_admin_action(db, admin_id, "medecin_reactive", medecin_id=medecin.id,
             details={"medecin_nom": f"{medecin.prenom} {medecin.nom}", "email": medecin.email})
@@ -638,6 +799,25 @@ class AdminService:
         medecin.supprime_le      = datetime.utcnow()
         medecin.supprime_par     = admin_id
         await db.commit()
+
+        await _send_email_smtp(
+            to_email=medecin.email,
+            to_name=f"{medecin.prenom} {medecin.nom}",
+            subject="Votre compte PneumoIA a été désactivé",
+            html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
+                  <h2 style="color:#dc2626">PneumoIA — Compte désactivé</h2>
+                  <p>Bonjour <strong>{medecin.prenom} {medecin.nom}</strong>,</p>
+                  <p>Votre compte PneumoIA a été <strong>désactivé</strong> par l'administration.</p>
+                  <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:16px;margin:16px 0">
+                    <p style="margin:0;color:#dc2626">
+                      Votre accès à la plateforme a été retiré. Votre dossier est conservé pendant 30 jours.
+                    </p>
+                  </div>
+                  <p>Pour toute question ou contestation, contactez l'administration PneumoIA.</p>
+                </div>
+            """,
+        )
 
         await log_admin_action(db, admin_id, "medecin_corbeille", medecin_id=medecin.id,
             details={"medecin_nom": f"{medecin.prenom} {medecin.nom}", "statut_precedent": medecin.statut_precedent})
@@ -711,37 +891,46 @@ class AdminService:
         ville:     Optional[str] = None,
     ) -> list[dict]:
         """Retourne les questions posées par les médecins avec filtres optionnels."""
-        from app.models.faq import FaqQuestion  # adapte si nécessaire
+        from app.models.questionMedecins import QuestionMedecin
 
-        query = select(FaqQuestion).order_by(FaqQuestion.created_at.desc())
-        if statut:    query = query.where(FaqQuestion.statut == statut)
-        if categorie: query = query.where(FaqQuestion.categorie == categorie)
-        if ville:     query = query.where(FaqQuestion.ville.ilike(f"%{ville}%"))
+        query = (
+            select(QuestionMedecin)
+            .options(selectinload(QuestionMedecin.medecin))
+            .order_by(QuestionMedecin.created_at.desc())
+        )
+        if statut:    query = query.where(QuestionMedecin.statut    == statut)
+        if categorie: query = query.where(QuestionMedecin.categorie == categorie)
 
         result = await db.execute(query)
-        return [
-            {
+        rows   = result.scalars().all()
+
+        out = []
+        for q in rows:
+            md = q.medecin
+            # filtre ville côté Python (QuestionMedecin n'a pas de champ ville)
+            if ville and md and md.adresse and ville.lower() not in md.adresse.lower():
+                continue
+            out.append({
                 "id":         q.id,
                 "question":   q.question,
-                "auteur":     q.auteur or "Médecin",
-                "email":      q.email,
-                "ville":      q.ville,
+                "auteur":     f"Dr {md.prenom} {md.nom}" if md else "Médecin",
+                "email":      md.email if md else None,
+                "ville":      (md.adresse or "").split(",")[-1].strip() if md else None,
                 "categorie":  q.categorie,
                 "statut":     q.statut,
                 "reponse":    q.reponse,
                 "created_at": q.created_at.isoformat() if q.created_at else None,
-            }
-            for q in result.scalars().all()
-        ]
+            })
+        return out
 
     @staticmethod
     async def repondre_question(
         db: AsyncSession, question_id: str, reponse: str, admin_id: str
     ) -> dict:
         """Enregistre la réponse à une question médecin."""
-        from app.models.faq import FaqQuestion
+        from app.models.questionMedecins import QuestionMedecin
 
-        result = await db.execute(select(FaqQuestion).where(FaqQuestion.id == question_id))
+        result = await db.execute(select(QuestionMedecin).where(QuestionMedecin.id == question_id))
         q      = result.scalar_one_or_none()
         if not q:
             raise HTTPException(404, "Question introuvable.")
@@ -762,7 +951,7 @@ class AdminService:
     @staticmethod
     async def get_faq(db: AsyncSession) -> list[dict]:
         """Retourne toutes les entrées FAQ (publiées + brouillons)."""
-        from app.models.faq import FaqPublie
+        from app.models.faqPubliee import FAQPubliee as FaqPublie
 
         result = await db.execute(select(FaqPublie).order_by(FaqPublie.created_at.desc()))
         return [
@@ -784,12 +973,11 @@ class AdminService:
         categorie: str, publie: bool, admin_id: str,
     ) -> dict:
         """Crée une nouvelle entrée FAQ publiée."""
-        from app.models.faq import FaqPublie
+        from app.models.faqPubliee import FAQPubliee as FaqPublie
 
         faq = FaqPublie(
-            id=str(uuid.uuid4()), question=question, reponse=reponse,
-            categorie=categorie, publie=publie, created_by=admin_id,
-            created_at=datetime.utcnow(),
+            question=question, reponse=reponse,
+            categorie=categorie, publie=publie, admin_id=admin_id,
         )
         db.add(faq)
         await db.commit()
@@ -803,7 +991,7 @@ class AdminService:
         categorie: str, publie: bool, admin_id: str,
     ) -> dict:
         """Modifie une entrée FAQ existante."""
-        from app.models.faq import FaqPublie
+        from app.models.faqPubliee import FAQPubliee as FaqPublie
 
         result = await db.execute(select(FaqPublie).where(FaqPublie.id == faq_id))
         faq    = result.scalar_one_or_none()
@@ -821,7 +1009,7 @@ class AdminService:
     @staticmethod
     async def toggle_faq_publie(db: AsyncSession, faq_id: str, admin_id: str) -> dict:
         """Bascule l'état publié/brouillon d'une entrée FAQ."""
-        from app.models.faq import FaqPublie
+        from app.models.faqPubliee import FAQPubliee as FaqPublie
 
         result = await db.execute(select(FaqPublie).where(FaqPublie.id == faq_id))
         faq    = result.scalar_one_or_none()
@@ -835,7 +1023,7 @@ class AdminService:
     @staticmethod
     async def vider_faq(db: AsyncSession, admin_id: str) -> dict:
         """Supprime toutes les entrées FAQ définitivement."""
-        from app.models.faq import FaqPublie
+        from app.models.faqPubliee import FAQPubliee as FaqPublie
 
         result = await db.execute(select(FaqPublie))
         faqs   = result.scalars().all()
@@ -847,7 +1035,7 @@ class AdminService:
     @staticmethod
     async def supprimer_faq(db: AsyncSession, faq_id: str, admin_id: str) -> dict:
         """Supprime définitivement une entrée FAQ."""
-        from app.models.faq import FaqPublie
+        from app.models.faqPubliee import FAQPubliee as FaqPublie
 
         result = await db.execute(select(FaqPublie).where(FaqPublie.id == faq_id))
         faq    = result.scalar_one_or_none()
@@ -933,8 +1121,8 @@ class AdminService:
             count = await db.scalar(
                 select(func.count()).select_from(Consultation)
                 .where(
-                    Consultation.date_consultation >= debut,
-                    Consultation.date_consultation <= fin,
+                    Consultation.created_at >= debut,
+                    Consultation.created_at <= fin,
                 )
             ) or 0
             mois_data.append(count)
@@ -1026,8 +1214,8 @@ class AdminService:
                 select(func.count()).select_from(Consultation)
                 .where(
                     Consultation.medecin_id == md.id,
-                    Consultation.date_consultation >= debut,
-                    Consultation.date_consultation <= fin,
+                    Consultation.created_at >= debut,
+                    Consultation.created_at <= fin,
                 )
             ) or 0
             ville_map[ville]["consultations"] += count
@@ -1067,10 +1255,12 @@ class AdminService:
         Top N médecins triés par concordance IA décroissante.
         Retourne : [{ id, nom, prenom, specialite, photo_url, concordance_ia, nb_consultations }]
         """
+        from app.models.consultation import Consultation
+
         result = await db.execute(
             select(Medecin)
             .where(Medecin.statut == "valide")
-            .options(selectinload(Medecin.consultations).selectinload("diagnostic"))
+            .options(selectinload(Medecin.consultations).selectinload(Consultation.diagnostic))
         )
         medecins = result.scalars().all()
 
@@ -1100,6 +1290,7 @@ class AdminService:
 
         enriched.sort(key=lambda x: x["concordance_ia"], reverse=True)
         return enriched[:limit]
+
 
     # ─────────────────────────────────────────────────────────────────────────
     # 17. PARAMÈTRES
@@ -1184,9 +1375,7 @@ class AdminService:
         from app.models.audit_log import AuditLog  # adapte si nécessaire
 
         query = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(200)
-        if type:   query = query.where(AuditLog.type   == type)
-        if statut: query = query.where(AuditLog.statut == statut)
-
+        # AuditLog n'a pas de colonnes type/statut — filtrage ignoré
         result = await db.execute(query)
         logs   = result.scalars().all()
 
@@ -1195,10 +1384,10 @@ class AdminService:
                 {
                     "id":     l.id,
                     "action": l.action,
-                    "acteur": l.acteur or "Système",
+                    "acteur": (l.details or {}).get("admin_id", l.medecin_id or "Système"),
                     "date":   l.created_at.isoformat() if l.created_at else None,
-                    "statut": l.statut or "info",
-                    "type":   l.type   or "info",
+                    "statut": "success",
+                    "type":   l.action.split("_")[0] if l.action else "info",
                 }
                 for l in logs
             ]
@@ -1287,7 +1476,7 @@ class AdminService:
 
     @staticmethod
     async def supprimer_definitif(db: AsyncSession, medecin_id: str, admin_id: str) -> dict:
-        """Supprime définitivement un médecin depuis la corbeille + email Brevo."""
+        """Supprime définitivement un médecin depuis la corbeille + email de notification envoyé au médecin."""
         result  = await db.execute(select(Medecin).where(Medecin.id == medecin_id))
         medecin = result.scalar_one_or_none()
 
@@ -1300,29 +1489,22 @@ class AdminService:
         await db.delete(medecin)
         await db.commit()
 
-        try:
-            import httpx
-            brevo_payload = {
-                "sender": {"name": "PneumoIA", "email": settings.ADMIN_EMAIL},
-                "to":     [{"email": email, "name": f"{prenom} {nom_med}"}],
-                "subject": "Votre compte PneumoIA a été supprimé",
-                "htmlContent": f"""
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
-                      <h2 style="color:#dc2626">PneumoIA — Suppression de compte</h2>
-                      <p>Bonjour <strong>{prenom} {nom_med}</strong>,</p>
-                      <p>Votre compte PneumoIA a été <strong>supprimé définitivement</strong>.</p>
-                      <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:16px;margin:16px 0">
-                        <p style="margin:0;color:#dc2626">Toutes vos données ont été effacées de notre système.</p>
-                      </div>
-                      <p>Pour toute question, contactez l'administration PneumoIA.</p>
-                    </div>
-                """,
-            }
-            async with httpx.AsyncClient() as client:
-                await client.post("https://api.brevo.com/v3/smtp/email", json=brevo_payload,
-                    headers={"api-key": settings.BREVO_API_KEY, "Content-Type": "application/json"}, timeout=10)
-        except Exception:
-            pass
+        await _send_email_smtp(
+            to_email=email,
+            to_name=f"{prenom} {nom_med}",
+            subject="Votre compte PneumoIA a été supprimé",
+            html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
+                  <h2 style="color:#dc2626">PneumoIA — Suppression de compte</h2>
+                  <p>Bonjour <strong>{prenom} {nom_med}</strong>,</p>
+                  <p>Votre compte PneumoIA a été <strong>supprimé définitivement</strong>.</p>
+                  <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:16px;margin:16px 0">
+                    <p style="margin:0;color:#dc2626">Toutes vos données ont été effacées de notre système.</p>
+                  </div>
+                  <p>Pour toute question, contactez l'administration PneumoIA.</p>
+                </div>
+            """,
+        )
 
         await log_admin_action(db, admin_id, "medecin_supprime",
             details={"medecin_nom": f"{prenom} {nom_med}", "email": email})

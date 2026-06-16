@@ -1,8 +1,10 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import settings
@@ -22,9 +24,25 @@ from app.routers.notifications    import router as router_notifications
 
 app = FastAPI(title="PneumoIA API", version="1.0.0")
 
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    champs_manquants = []
+    for err in exc.errors():
+        loc = " → ".join(str(x) for x in err["loc"] if x != "body")
+        champs_manquants.append(f"{loc} : {err['msg']}")
+    message = "Champs invalides : " + " | ".join(champs_manquants)
+    print(f"[422] {request.url.path} — {message}")
+    return JSONResponse(status_code=422, content={"detail": message})
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,6 +90,17 @@ async def startup():
                     AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'type_destinataire')
                 ) THEN
                     ALTER TYPE type_destinataire ADD VALUE 'aide_soignant';
+                END IF;
+            END $$
+        """))
+        await conn.execute(text("""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_enum
+                    WHERE enumlabel = 'corbeille'
+                    AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'statut_medecin')
+                ) THEN
+                    ALTER TYPE statut_medecin ADD VALUE 'corbeille';
                 END IF;
             END $$
         """))

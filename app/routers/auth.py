@@ -38,12 +38,6 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PHOTO_MAX_SIZE      = 2 * 1024 * 1024          # 2 Mo
 DOCUMENT_MAX_SIZE   = 5 * 1024 * 1024          # 5 Mo
 PHOTO_TYPES_AUTORISES  = {"image/jpeg", "image/png", "image/webp"}
-DOC_TYPES_AUTORISES    = {
-    "application/pdf",
-    "image/jpeg", "image/png",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-}
 
 def generate_doc_id():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
@@ -68,13 +62,7 @@ def valider_photo(photo: UploadFile):
     return contenu
 
 def valider_document(fichier: UploadFile, nom_doc: str):
-    """Vérifie type et taille d'un document."""
-    if fichier.content_type not in DOC_TYPES_AUTORISES:
-        raise HTTPException(
-            400,
-            f"Format non accepté pour '{nom_doc}' : {fichier.content_type}. "
-            f"Acceptés : PDF, JPG, PNG, DOCX"
-        )
+    """Vérifie uniquement la taille d'un document (toutes extensions acceptées)."""
     contenu = fichier.file.read()
     if len(contenu) > DOCUMENT_MAX_SIZE:
         raise HTTPException(
@@ -221,16 +209,17 @@ async def register(
     db.add(notif)
     await db.commit()
 
-    # 7b. SMS Twilio — téléphone admin depuis BDD, sinon depuis .env
-    phone_admin = (admin.phone if admin and admin.phone else None) or settings.ADMIN_PHONE
+    # 7b. SMS Twilio — numéro admin depuis la BDD (enregistré à la première connexion)
+    phone_admin = admin.phone if admin and admin.phone else None
+    print(f"[SMS] Numéro admin en BDD : {phone_admin!r}")
     if phone_admin:
         try:
             await notify_admin_new_medecin(nom, prenom, specialite, phone_admin)
-            print(f"✅ SMS envoyé à {phone_admin}")
+            print(f"[SMS] ✅ SMS envoyé à {phone_admin}")
         except Exception as e:
-            print(f"❌ SMS non envoyé — Erreur Twilio : {e}")
+            print(f"[SMS] ❌ Échec Twilio — numéro={phone_admin} erreur={type(e).__name__}: {e}")
     else:
-        print("⚠️ Aucun numéro admin configuré — SMS ignoré")
+        print("[SMS] ⚠️ Numéro admin non encore enregistré en BDD — connecte-toi au dashboard admin pour l'enregistrer")
 
     return {
         "message": (

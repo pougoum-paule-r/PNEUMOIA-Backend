@@ -15,11 +15,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column('medecins', sa.Column('telephone', sa.String(30),  nullable=True))
-    op.add_column('medecins', sa.Column('adresse',   sa.String(300), nullable=True))
-    op.add_column('medecins', sa.Column('bio',       sa.Text(),      nullable=True))
-    op.add_column('medecins ', sa.Column('linkedin',  sa.String(300), nullable=True))
-    op.add_column('medecins', sa.Column('website',   sa.String(300), nullable=True))
+    conn = op.get_bind()
+    conn.execute(sa.text("ALTER TABLE medecins ADD COLUMN IF NOT EXISTS telephone VARCHAR(30)"))
+    conn.execute(sa.text("ALTER TABLE medecins ADD COLUMN IF NOT EXISTS adresse VARCHAR(300)"))
+    conn.execute(sa.text("ALTER TABLE medecins ADD COLUMN IF NOT EXISTS bio TEXT"))
+    conn.execute(sa.text("ALTER TABLE medecins ADD COLUMN IF NOT EXISTS linkedin VARCHAR(300)"))
+    conn.execute(sa.text("ALTER TABLE medecins ADD COLUMN IF NOT EXISTS website VARCHAR(300)"))
 
 
 def downgrade() -> None:

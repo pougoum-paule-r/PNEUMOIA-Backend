@@ -32,7 +32,9 @@ class DocumentMedecin(Base):
     nom_fichier   = Column(String(255), nullable=True)
     taille_octets = Column(Integer,     nullable=True)
     mime_type     = Column(String(100), nullable=True)
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
+    statut        = Column(String(20),  nullable=False, default="en_attente")
+    motif_rejet   = Column(String(500), nullable=True)
+    created_at    = Column(DateTime,    nullable=False, default=lambda: datetime.utcnow())
     
     # Relations
     medecin = relationship("Medecin", back_populates="documents")

@@ -9,7 +9,6 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-
 revision: str = 'c2d3e4f5a6b7'
 down_revision: Union[str, None] = 'b1adbd9ba7bb'
 branch_labels: Union[str, Sequence[str], None] = None
@@ -17,11 +16,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('otp_codes', sa.Column(
-        'purpose', sa.String(20), nullable=False, server_default='login'
+    conn = op.get_bind()
+    conn.execute(sa.text(
+        "ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS purpose VARCHAR(20) NOT NULL DEFAULT 'login'"
     ))
-    op.add_column('otp_codes', sa.Column(
-        'fail_count', sa.Integer(), nullable=False, server_default='0'
+    conn.execute(sa.text(
+        "ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS fail_count INTEGER NOT NULL DEFAULT 0"
     ))
 
 

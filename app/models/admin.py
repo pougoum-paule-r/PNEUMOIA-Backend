@@ -38,6 +38,7 @@ class Admin(Base):
     medecins_valides = relationship(
         "Medecin",
         back_populates="valideur",
+        foreign_keys="Medecin.valide_par",
         cascade="save-update, merge",  # retiré delete-orphan : un médecin validé
         # ne doit pas être supprimé si l'admin est supprimé
     )
