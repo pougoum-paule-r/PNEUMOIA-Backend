@@ -187,24 +187,19 @@ async def create_publication(
     await db.flush()
 
     # Notifier tous les aides actifs du médecin
-    from app.services.notification_service import push_notif
-    from app.models.aide_soignant import AideSoignant
-    aides_r = await db.execute(
-        select(AideSoignant).where(
-            AideSoignant.medecin_id == actor["id"],
-            AideSoignant.statut     == "actif",
+    try:
+        from app.services.notification_service import push_notif as _pn
+        from app.models.aide_soignant import AideSoignant as _AS
+        _aides_r = await db.execute(
+            select(_AS).where(_AS.medecin_id == actor["id"], _AS.statut == "actif")
         )
-    )
-    for aide in aides_r.scalars().all():
-        await push_notif(
-            db,
-            dest_id    = aide.id,
-            type_dest  = "aide_soignant",
-            type_notif = "nouveau_post",
-            titre      = "Nouvelle publication",
-            message    = f"{actor['nom']} a publié « {pub.titre} ».",
-            meta       = {"lien": "/aide/publications", "pub_id": pub.id},
-        )
+        for _aide in _aides_r.scalars().all():
+            await _pn(db, dest_id=_aide.id, type_dest="aide_soignant",
+                      type_notif="nouveau_post", titre="Nouvelle publication",
+                      message=f"{actor['nom']} a publié « {pub.titre} ».",
+                      meta={"lien": "/aide/publications", "pub_id": pub.id})
+    except Exception as _e:
+        import logging; logging.getLogger(__name__).warning("push_notif pub: %s", _e)
 
     await db.commit()
     await db.refresh(pub)
@@ -321,32 +316,23 @@ async def reply_to_commentaire(
     db.add(c)
     await db.flush()
 
-    from app.services.notification_service import push_notif
-    pub_obj = await db.get(Publication, pub_id)
-
-    # Notifier l'auteur de la publication (médecin) si c'est l'aide qui répond
-    if actor["type"] == "aide_soignant" and pub_obj and pub_obj.auteur_id:
-        await push_notif(
-            db,
-            dest_id    = pub_obj.auteur_id,
-            type_dest  = "medecin",
-            type_notif = "nouveau_commentaire",
-            titre      = "Réponse sur votre publication",
-            message    = f"{actor['nom']} a répondu à un commentaire sur « {pub_obj.titre} ».",
-            meta       = {"lien": "/medecin/commentaires"},
-        )
-
-    # Notifier l'aide auteur du commentaire parent si le médecin lui répond
-    if actor["type"] == "medecin" and parent.auteur_type == "aide_soignant" and parent.auteur_aide_id:
-        await push_notif(
-            db,
-            dest_id    = parent.auteur_aide_id,
-            type_dest  = "aide_soignant",
-            type_notif = "nouveau_commentaire",
-            titre      = "Réponse à votre commentaire",
-            message    = f"{actor['nom']} a répondu à votre commentaire{' sur « ' + pub_obj.titre + ' »' if pub_obj else ''}.",
-            meta       = {"lien": "/aide/publications", "pub_id": pub_id},
-        )
+    try:
+        from app.services.notification_service import push_notif as _pn
+        pub_obj = await db.get(Publication, pub_id)
+        # Notifier l'auteur de la publication (médecin) si c'est l'aide qui répond
+        if actor["type"] == "aide_soignant" and pub_obj and pub_obj.auteur_id:
+            await _pn(db, dest_id=pub_obj.auteur_id, type_dest="medecin",
+                      type_notif="nouveau_commentaire", titre="Réponse sur votre publication",
+                      message=f"{actor['nom']} a répondu à un commentaire sur « {pub_obj.titre} ».",
+                      meta={"lien": "/medecin/commentaires"})
+        # Notifier l'aide auteur du commentaire parent si le médecin lui répond
+        if actor["type"] == "medecin" and parent.auteur_type == "aide_soignant" and parent.auteur_aide_id:
+            await _pn(db, dest_id=parent.auteur_aide_id, type_dest="aide_soignant",
+                      type_notif="nouveau_commentaire", titre="Réponse à votre commentaire",
+                      message=f"{actor['nom']} a répondu à votre commentaire{' sur « ' + pub_obj.titre + ' »' if pub_obj else ''}.",
+                      meta={"lien": "/aide/publications", "pub_id": pub_id})
+    except Exception as _e:
+        import logging; logging.getLogger(__name__).warning("push_notif reply: %s", _e)
 
     await db.commit()
     await db.refresh(c)
@@ -388,17 +374,15 @@ async def toggle_like_commentaire(
 
         # Notifier l'aide soignant si c'est lui l'auteur du commentaire
         if c.auteur_type == "aide_soignant" and c.auteur_aide_id and c.auteur_aide_id != actor["id"]:
-            await db.flush()
-            from app.services.notification_service import push_notif
-            await push_notif(
-                db,
-                dest_id    = c.auteur_aide_id,
-                type_dest  = "aide_soignant",
-                type_notif = "referent_like",
-                titre      = "Votre commentaire a été aimé",
-                message    = f"{actor['nom']} a aimé votre commentaire.",
-                meta       = {"lien": "/aide/publications", "pub_id": c.publication_id},
-            )
+            try:
+                await db.flush()
+                from app.services.notification_service import push_notif as _pn
+                await _pn(db, dest_id=c.auteur_aide_id, type_dest="aide_soignant",
+                          type_notif="referent_like", titre="Votre commentaire a été aimé",
+                          message=f"{actor['nom']} a aimé votre commentaire.",
+                          meta={"lien": "/aide/publications", "pub_id": c.publication_id})
+            except Exception as _e:
+                import logging; logging.getLogger(__name__).warning("push_notif like: %s", _e)
 
     await db.commit()
     return {"liked": liked, "likes_count": c.likes_count}

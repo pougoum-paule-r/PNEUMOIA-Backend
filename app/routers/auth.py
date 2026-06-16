@@ -262,7 +262,17 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     db.add(otp_entry)
     await db.commit()
 
-    asyncio.create_task(send_otp_email(medecin.email, medecin.nom, otp))
+    async def _send_otp_with_fallback():
+        try:
+            await send_otp_email(medecin.email, medecin.nom, otp)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Email OTP non envoyé (%s) — CODE CONSOLE: %s", e, otp
+            )
+            print(f"\n{'='*50}\n[OTP LOGIN] {medecin.email} → code: {otp}\n{'='*50}\n", flush=True)
+
+    asyncio.create_task(_send_otp_with_fallback())
 
     return {
         "message":    "Code OTP envoyé à votre email. Valable 5 minutes.",
@@ -532,7 +542,17 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     db.add(otp_entry)
     await db.commit()
 
-    asyncio.create_task(send_reset_otp_email(medecin.email, medecin.nom, otp))
+    async def _send_reset_with_fallback():
+        try:
+            await send_reset_otp_email(medecin.email, medecin.nom, otp)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Email reset OTP non envoyé (%s) — CODE CONSOLE: %s", e, otp
+            )
+            print(f"\n{'='*50}\n[OTP RESET] {medecin.email} → code: {otp}\n{'='*50}\n", flush=True)
+
+    asyncio.create_task(_send_reset_with_fallback())
 
     return {"message": "Code OTP envoyé à votre email. Valable 5 minutes.", "medecin_id": str(medecin.id)}
 
