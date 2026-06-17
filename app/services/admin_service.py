@@ -1519,24 +1519,30 @@ class AdminService:
     async def get_avis(db: AsyncSession) -> list[dict]:
         """
         Retourne tous les avis publiés par les médecins.
-        Retourne : [{ id, prenom, nom, photo_url, specialite, hopital, ville, note, commentaire, created_at, vu }]
+        Retourne : [{ id, civilite, prenom, nom, photo_url, specialite, etablissement, ville, note, commentaire, created_at, vu }]
         """
-        from app.models.avis import Avis  # adapte si nécessaire
+        from app.models.avis import Avis
+        from sqlalchemy.orm import selectinload
 
-        result = await db.execute(select(Avis).order_by(Avis.created_at.desc()))
+        result = await db.execute(
+            select(Avis)
+            .options(selectinload(Avis.medecin))
+            .order_by(Avis.created_at.desc())
+        )
         return [
             {
-                "id":          a.id,
-                "prenom":      a.prenom,
-                "nom":         a.nom,
-                "photo_url":   build_url(a.photo_url),
-                "specialite":  a.specialite,
-                "hopital":     getattr(a, "hopital",  None),
-                "ville":       getattr(a, "ville",    None),
-                "note":        a.note,
-                "commentaire": a.commentaire,
-                "created_at":  a.created_at.isoformat() if a.created_at else None,
-                "vu":          a.vu,
+                "id":           a.id,
+                "civilite":     a.medecin.civilite     if a.medecin else None,
+                "prenom":       a.medecin.prenom        if a.medecin else None,
+                "nom":          a.medecin.nom           if a.medecin else None,
+                "photo_url":    build_url(a.medecin.photo_url) if a.medecin else None,
+                "specialite":   a.medecin.specialite    if a.medecin else None,
+                "etablissement":a.medecin.etablissement if a.medecin else None,
+                "ville":        a.medecin.ville         if a.medecin else None,
+                "note":         a.note,
+                "commentaire":  a.contenu,
+                "created_at":   a.created_at.isoformat() if a.created_at else None,
+                "vu":           a.vu,
             }
             for a in result.scalars().all()
         ]

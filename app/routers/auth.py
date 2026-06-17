@@ -25,6 +25,7 @@ from jose              import JWTError
 from app.services.email_service  import (
     send_otp_email, send_reset_otp_email,
     send_piratage_admin_email, send_piratage_medecin_email,
+    send_nouvelle_demande_admin_email,
 )
 from app.services.sms_service    import notify_admin_new_medecin
 from app.config import settings
@@ -190,7 +191,7 @@ async def register(
     # ── 6. Commit tout en BD ───────────────────────────────────
     await db.commit()
 
-    # ── 7. Notifier l'admin (SMS + notification in-app) ───────
+    # ── 7. Notifier l'admin (SMS + notification in-app + email) ───────
     admin_result = await db.execute(select(Admin).limit(1))
     admin = admin_result.scalar_one_or_none()
 
@@ -220,6 +221,17 @@ async def register(
             print(f"[SMS] ❌ Échec Twilio — numéro={phone_admin} erreur={type(e).__name__}: {e}")
     else:
         print("[SMS] ⚠️ Numéro admin non encore enregistré en BDD — connecte-toi au dashboard admin pour l'enregistrer")
+
+    # 7c. Email — adresse admin en BDD, sinon fallback sur ADMIN_EMAIL du .env
+    email_admin = (admin.email if admin and admin.email else None) or settings.ADMIN_EMAIL
+    if email_admin:
+        try:
+            await send_nouvelle_demande_admin_email(
+                email_admin, nom, prenom, specialite, medecin.id,
+            )
+            print(f"[EMAIL] ✅ Notification envoyée à {email_admin}")
+        except Exception as e:
+            print(f"[EMAIL] ❌ Échec notification admin — {type(e).__name__}: {e}")
 
     return {
         "message": (

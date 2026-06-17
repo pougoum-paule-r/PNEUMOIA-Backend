@@ -161,6 +161,42 @@ async def send_reset_otp_email(to_email: str, nom: str, otp: str) -> None:
     )
 
 
+# ─── Nouvelle demande d'adhésion médecin → Admin ─────────────────────────────
+async def send_nouvelle_demande_admin_email(
+    admin_email: str, medecin_nom: str, medecin_prenom: str,
+    specialite: str, medecin_id: str,
+) -> None:
+    lien = f"{settings.FRONTEND_URL}/admin/demandes/{medecin_id}"
+    await _send(
+        to_email = admin_email,
+        subject  = f"PneumoIA — Nouvelle demande d'adhésion : Dr {medecin_prenom} {medecin_nom}",
+        html     = f"""
+        <div style="font-family:sans-serif;max-width:500px;margin:auto">
+          <h2 style="color:#0f766e">Nouvelle demande d'adhésion 🩺</h2>
+          <p>Un médecin vient de soumettre une demande d'accès à la plateforme PneumoIA.</p>
+          <table style="width:100%;border-collapse:collapse;font-size:14px;margin:16px 0">
+            <tr><td style="padding:8px;color:#6b7280;width:140px">Médecin</td>
+                <td style="padding:8px;font-weight:bold">Dr {medecin_prenom} {medecin_nom}</td></tr>
+            <tr style="background:#f9fafb">
+                <td style="padding:8px;color:#6b7280">Spécialité</td>
+                <td style="padding:8px">{specialite}</td></tr>
+            <tr><td style="padding:8px;color:#6b7280">Identifiant</td>
+                <td style="padding:8px;font-family:monospace">{medecin_id}</td></tr>
+          </table>
+          <a href="{lien}"
+             style="display:inline-block;background:#0f766e;color:white;
+                    padding:12px 28px;border-radius:8px;text-decoration:none;
+                    font-weight:bold;margin:16px 0">
+            Examiner la demande
+          </a>
+          <p style="color:#6b7280;font-size:13px">
+            Connectez-vous au tableau de bord administrateur pour valider ou refuser ce dossier.
+          </p>
+        </div>
+        """,
+    )
+
+
 # ─── Alerte piratage → Admin ──────────────────────────────────────────────────
 async def send_piratage_admin_email(
     admin_email: str, medecin_nom: str, medecin_email: str,

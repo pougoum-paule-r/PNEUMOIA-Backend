@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import app.routers.auth; import app.services.email_service; print\\('OK'\\)\")",
+      "Bash(ls \"/c/Users/DELL/PNEUMOIA-Frontend\" 2>&1 | head -50)",
+      "Read(//c/Users/DELL/**)"
     ]
   }
 }
