@@ -291,9 +291,11 @@ class AdminService:
                         scores.append(float(pct))
         concordance_ia = round(sum(scores) / len(scores)) if scores else None
 
-        # Dernière activité
+        # Dernière activité = max(dernière connexion, dernière consultation)
         dates = [c.created_at for c in consultations if c.created_at]
-        derniere_activite = max(dates).isoformat() if dates else None
+        derniere_consultation = max(dates) if dates else None
+        candidates = [d for d in [derniere_consultation, m.derniere_connexion] if d]
+        derniere_activite = max(candidates).isoformat() if candidates else None
 
         # Cas cliniques publiés
         nb_cas = len(cas_cliniques)

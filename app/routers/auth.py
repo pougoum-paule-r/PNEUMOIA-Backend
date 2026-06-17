@@ -313,6 +313,13 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
         raise HTTPException(401, "Code OTP expiré. Reconnectez-vous pour en recevoir un nouveau.")
 
     otp_entry.used = True
+
+    # Marquer la connexion réussie sur le médecin
+    med_result = await db.execute(select(Medecin).where(Medecin.id == body.medecin_id))
+    medecin    = med_result.scalar_one_or_none()
+    if medecin:
+        medecin.derniere_connexion = datetime.utcnow()
+
     await db.commit()
 
     token = create_access_token({"sub": str(body.medecin_id), "role": "medecin"})

@@ -71,6 +71,9 @@ class Medecin(Base):
     relance_sent = Column(Boolean,  nullable=False, default=False)
     relance_at   = Column(DateTime, nullable=True)
 
+    # ── Traçage d'activité ───────────────────────────────────────────
+    derniere_connexion = Column(DateTime, nullable=True)
+
     # Relations
     valideur           = relationship("Admin",            back_populates="medecins_valides", foreign_keys=[valide_par])
     rejeteur            = relationship("Admin",           foreign_keys=[rejete_par])
