@@ -891,35 +891,60 @@ class AdminService:
         ville:     Optional[str] = None,
     ) -> list[dict]:
         """Retourne les questions posées par les médecins avec filtres optionnels."""
-        from app.models.questionMedecins import QuestionMedecin
+        from app.models.question_admin import QuestionAdmin
+
+        AVATAR_COLORS = ["#185FA5","#7C3AED","#D97706","#0891B2","#16a34a","#dc2626","#9333ea","#0284c7"]
 
         query = (
-            select(QuestionMedecin)
-            .options(selectinload(QuestionMedecin.medecin))
-            .order_by(QuestionMedecin.created_at.desc())
+            select(QuestionAdmin)
+            .order_by(QuestionAdmin.created_at.desc())
         )
-        if statut:    query = query.where(QuestionMedecin.statut    == statut)
-        if categorie: query = query.where(QuestionMedecin.categorie == categorie)
+        if statut: query = query.where(QuestionAdmin.statut == statut)
 
         result = await db.execute(query)
         rows   = result.scalars().all()
 
+        # Charger les médecins en une seule requête
+        medecin_ids = list({q.medecin_id for q in rows if q.medecin_id})
+        medecins_map: dict = {}
+        if medecin_ids:
+            md_result = await db.execute(
+                select(Medecin).where(Medecin.id.in_(medecin_ids))
+            )
+            medecins_map = {m.id: m for m in md_result.scalars().all()}
+
         out = []
         for q in rows:
-            md = q.medecin
-            # filtre ville côté Python (QuestionMedecin n'a pas de champ ville)
-            if ville and md and md.adresse and ville.lower() not in md.adresse.lower():
+            md = medecins_map.get(q.medecin_id)
+            nom_complet = f"Dr. {md.prenom} {md.nom}" if md else "Médecin inconnu"
+            ville_md    = (md.ville or "").strip() if md else ""
+            # filtre ville côté Python
+            if ville and ville != "Toutes" and ville_md.lower() != ville.lower():
                 continue
+            # filtre catégorie (QuestionAdmin n'a pas de champ catégorie — on skip si filtre actif)
+            if categorie and categorie != "Toutes":
+                continue
+            initials = (
+                f"{(md.prenom or ' ')[0]}{(md.nom or ' ')[0]}".upper()
+                if md else "??"
+            )
+            color_idx = sum(ord(c) for c in (md.id or "")) % len(AVATAR_COLORS) if md else 0
             out.append({
                 "id":         q.id,
-                "question":   q.question,
-                "auteur":     f"Dr {md.prenom} {md.nom}" if md else "Médecin",
-                "email":      md.email if md else None,
-                "ville":      (md.adresse or "").split(",")[-1].strip() if md else None,
-                "categorie":  q.categorie,
+                "question":   q.titre,
+                "medecin":    nom_complet,
+                "email":      md.email        if md else None,
+                "ville":      ville_md,
+                "photo_url":  build_url(md.photo_url) if md else None,
+                "cnom":       md.id           if md else "",
+                "hopital":    (md.etablissement or "") if md else "",
+                "initials":   initials,
+                "avatarColor": AVATAR_COLORS[color_idx],
+                "categorie":  "Autre",
                 "statut":     q.statut,
                 "reponse":    q.reponse,
-                "created_at": q.created_at.isoformat() if q.created_at else None,
+                "created_at": q.created_at.isoformat() + "Z" if q.created_at else None,
+                "repondu_le": q.repondu_at.isoformat() + "Z" if q.repondu_at else None,
             })
         return out
 
@@ -927,22 +952,65 @@ class AdminService:
     async def repondre_question(
         db: AsyncSession, question_id: str, reponse: str, admin_id: str
     ) -> dict:
-        """Enregistre la réponse à une question médecin."""
-        from app.models.questionMedecins import QuestionMedecin
+        """Enregistre la réponse à une question médecin et crée une notification sur la plateforme."""
+        from app.models.question_admin import QuestionAdmin
+        from app.models.notification import Notification
 
-        result = await db.execute(select(QuestionMedecin).where(QuestionMedecin.id == question_id))
+        result = await db.execute(select(QuestionAdmin).where(QuestionAdmin.id == question_id))
         q      = result.scalar_one_or_none()
         if not q:
             raise HTTPException(404, "Question introuvable.")
 
         q.reponse    = reponse
         q.statut     = "repondu"
-        q.repondu_le = datetime.utcnow()
+        q.repondu_at = datetime.utcnow()
+
+        # Notification visible dans l'espace médecin sur la plateforme
+        if q.medecin_id:
+            notif = Notification(
+                destinataire_id = q.medecin_id,
+                type_dest       = "medecin",
+                type_notif      = "faq_reponse",
+                titre           = "L'administration PneumoIA a répondu à votre question",
+                message         = f"Votre question : {q.titre[:80]}\n\nRéponse : {reponse[:300]}",
+                meta            = {"question_id": question_id, "lien": "/medecin/notifications"},
+            )
+            db.add(notif)
+
         await db.commit()
 
         await log_admin_action(db, admin_id, "faq_repondu",
             details={"question_id": question_id})
         return {"message": "Réponse enregistrée."}
+
+    @staticmethod
+    async def vider_historique_questions(db: AsyncSession, admin_id: str) -> dict:
+        """Supprime définitivement toutes les questions répondues."""
+        from app.models.question_admin import QuestionAdmin
+        result = await db.execute(
+            select(QuestionAdmin).where(QuestionAdmin.statut == "repondu")
+        )
+        questions = result.scalars().all()
+        for q in questions:
+            await db.delete(q)
+        await db.commit()
+        await log_admin_action(db, admin_id, "faq_historique_vide",
+            details={"nb": len(questions)})
+        return {"message": f"{len(questions)} question(s) supprimée(s)."}
+
+    @staticmethod
+    async def supprimer_question(db: AsyncSession, question_id: str, admin_id: str) -> dict:
+        """Supprime définitivement une question."""
+        from app.models.question_admin import QuestionAdmin
+        result = await db.execute(
+            select(QuestionAdmin).where(QuestionAdmin.id == question_id)
+        )
+        q = result.scalar_one_or_none()
+        if not q:
+            raise HTTPException(404, "Question introuvable.")
+        await db.delete(q)
+        await db.commit()
+        return {"message": "Question supprimée."}
 
     # ─────────────────────────────────────────────────────────────────────────
     # 15. FAQ — PUBLIÉES PAR L'ADMIN
@@ -950,10 +1018,15 @@ class AdminService:
 
     @staticmethod
     async def get_faq(db: AsyncSession) -> list[dict]:
-        """Retourne toutes les entrées FAQ (publiées + brouillons)."""
+        """Retourne toutes les entrées FAQ (publiées + brouillons) avec auteur."""
         from app.models.faqPubliee import FAQPubliee as FaqPublie
+        from app.models.admin import Admin
 
-        result = await db.execute(select(FaqPublie).order_by(FaqPublie.created_at.desc()))
+        result = await db.execute(
+            select(FaqPublie).options(selectinload(FaqPublie.admin))
+            .order_by(FaqPublie.created_at.desc())
+        )
+        faqs = result.scalars().all()
         return [
             {
                 "id":         f.id,
@@ -961,9 +1034,12 @@ class AdminService:
                 "reponse":    f.reponse,
                 "categorie":  f.categorie,
                 "publie":     f.publie,
-                "created_at": f.created_at.isoformat() if f.created_at else None,
+                "nb_vues":    f.nb_vues,
+                "auteur":     f.admin.nom if f.admin else "Administrateur",
+                "created_at": f.created_at.isoformat() + "Z" if f.created_at else None,
+                "updated_at": f.updated_at.isoformat() + "Z" if f.updated_at else None,
             }
-            for f in result.scalars().all()
+            for f in faqs
         ]
 
     @staticmethod
@@ -972,17 +1048,43 @@ class AdminService:
         question: str, reponse: str,
         categorie: str, publie: bool, admin_id: str,
     ) -> dict:
-        """Crée une nouvelle entrée FAQ publiée."""
+        """Crée une nouvelle entrée FAQ. Si publie=True, notifie tous les médecins validés."""
         from app.models.faqPubliee import FAQPubliee as FaqPublie
+        from app.models.notification import Notification
 
         faq = FaqPublie(
             question=question, reponse=reponse,
             categorie=categorie, publie=publie, admin_id=admin_id,
         )
         db.add(faq)
+        await db.flush()  # obtenir faq.id sans encore committer
+
+        if publie:
+            medecins = (await db.execute(
+                select(Medecin.id).where(Medecin.statut == "valide")
+            )).scalars().all()
+            for mid in medecins:
+                db.add(Notification(
+                    destinataire_id = mid,
+                    type_dest       = "medecin",
+                    type_notif      = "nouvelle_faq",
+                    titre           = f"L'administration PneumoIA a publié une nouvelle FAQ",
+                    message         = f"Question : {question[:120]}\n\nRéponse : {reponse[:200] if reponse else ''}",
+                    meta            = {"faq_id": faq.id, "lien": "/medecin/notifications"},
+                ))
+
         await db.commit()
         await db.refresh(faq)
-        return {"message": "FAQ créée.", "id": faq.id}
+        return {
+            "id":         faq.id,
+            "question":   faq.question,
+            "reponse":    faq.reponse,
+            "categorie":  faq.categorie,
+            "publie":     faq.publie,
+            "nb_vues":    faq.nb_vues,
+            "created_at": faq.created_at.isoformat() + "Z" if faq.created_at else None,
+            "updated_at": None,
+        }
 
     @staticmethod
     async def modifier_faq(
@@ -1008,8 +1110,9 @@ class AdminService:
 
     @staticmethod
     async def toggle_faq_publie(db: AsyncSession, faq_id: str, admin_id: str) -> dict:
-        """Bascule l'état publié/brouillon d'une entrée FAQ."""
+        """Bascule l'état publié/brouillon d'une entrée FAQ. Notifie les médecins si publication."""
         from app.models.faqPubliee import FAQPubliee as FaqPublie
+        from app.models.notification import Notification
 
         result = await db.execute(select(FaqPublie).where(FaqPublie.id == faq_id))
         faq    = result.scalar_one_or_none()
@@ -1017,6 +1120,22 @@ class AdminService:
             raise HTTPException(404, "FAQ introuvable.")
 
         faq.publie = not faq.publie
+
+        # Notification à tous les médecins validés uniquement lors d'une publication
+        if faq.publie:
+            medecins = (await db.execute(
+                select(Medecin.id).where(Medecin.statut == "valide")
+            )).scalars().all()
+            for mid in medecins:
+                db.add(Notification(
+                    destinataire_id = mid,
+                    type_dest       = "medecin",
+                    type_notif      = "nouvelle_faq",
+                    titre           = f"L'administration PneumoIA a publié une nouvelle FAQ",
+                    message         = f"Question : {faq.question[:120]}\n\nRéponse : {faq.reponse[:200] if faq.reponse else ''}",
+                    meta            = {"faq_id": faq.id, "lien": "/medecin/notifications"},
+                ))
+
         await db.commit()
         return {"publie": faq.publie}
 
@@ -1100,11 +1219,45 @@ class AdminService:
             d     = (datetime.utcnow() - timedelta(days=i)).date()
             count = await db.scalar(
                 select(func.count()).select_from(Consultation)
-                .where(cast(Consultation.date_consultation, Date) == d)
+                .where(cast(Consultation.created_at, Date) == d)
             ) or 0
             result.append({"j": JOURS_FR[d.weekday()], "c": count})
 
         return {"jours": result}
+
+    @staticmethod
+    async def get_consultations_jours(
+        db: AsyncSession, from_date: str, to_date: str
+    ) -> list:
+        """
+        Consultations par jour sur une plage de dates quelconque.
+        Retourne : [{ "date": "2026-06-11", "c": 5 }, ...] — une entrée par jour calendaire.
+        """
+        from app.models.consultation import Consultation
+
+        d_from = datetime.strptime(from_date, "%Y-%m-%d").date()
+        d_to   = datetime.strptime(to_date,   "%Y-%m-%d").date()
+
+        rows = (await db.execute(
+            select(
+                cast(Consultation.created_at, Date).label("jour"),
+                func.count().label("nb"),
+            )
+            .where(
+                Consultation.created_at >= datetime.combine(d_from, datetime.min.time()),
+                Consultation.created_at <= datetime.combine(d_to,   datetime.max.time()),
+            )
+            .group_by("jour")
+        )).all()
+
+        counts  = {str(r.jour): r.nb for r in rows}
+        result  = []
+        current = d_from
+        while current <= d_to:
+            result.append({"date": str(current), "c": counts.get(str(current), 0)})
+            current += timedelta(days=1)
+
+        return result
 
     @staticmethod
     async def get_consultations_annee(db: AsyncSession, year: int) -> dict:
@@ -1146,12 +1299,12 @@ class AdminService:
         # Nombre de consultations par jour sur la période
         rows = (await db.execute(
             select(
-                cast(Consultation.date_consultation, Date).label("jour"),
+                cast(Consultation.created_at, Date).label("jour"),
                 func.count().label("nb"),
             )
             .where(
-                Consultation.date_consultation >= datetime.combine(d_from, datetime.min.time()),
-                Consultation.date_consultation <= datetime.combine(d_to,   datetime.max.time()),
+                Consultation.created_at >= datetime.combine(d_from, datetime.min.time()),
+                Consultation.created_at <= datetime.combine(d_to,   datetime.max.time()),
             )
             .group_by("jour")
         )).all()
@@ -1168,8 +1321,8 @@ class AdminService:
         total_prec = await db.scalar(
             select(func.count()).select_from(Consultation)
             .where(
-                Consultation.date_consultation >= datetime.combine(prec_from, datetime.min.time()),
-                Consultation.date_consultation <= datetime.combine(prec_to,   datetime.max.time()),
+                Consultation.created_at >= datetime.combine(prec_from, datetime.min.time()),
+                Consultation.created_at <= datetime.combine(prec_to,   datetime.max.time()),
             )
         ) or 0
         variation = round((total - total_prec) / total_prec * 100) if total_prec else 0
@@ -1199,32 +1352,89 @@ class AdminService:
         debut = datetime(y, m, 1)
         fin   = datetime(y, m, calendar.monthrange(y, m)[1], 23, 59, 59)
 
+        # Mapping ville → région pour le Cameroun
+        VILLE_REGION: dict[str, str] = {
+            # Littoral
+            "Douala": "Littoral", "Nkongsamba": "Littoral", "Edéa": "Littoral",
+            "Loum": "Littoral", "Mbanga": "Littoral",
+            # Centre
+            "Yaoundé": "Centre", "Yaounde": "Centre", "Obala": "Centre",
+            "Mbalmayo": "Centre", "Mfou": "Centre", "Bafia": "Centre",
+            # Ouest
+            "Bafoussam": "Ouest", "Dschang": "Ouest", "Foumban": "Ouest",
+            "Bafang": "Ouest", "Mbouda": "Ouest",
+            # Nord
+            "Garoua": "Nord", "Guider": "Nord", "Figuil": "Nord",
+            # Est
+            "Bertoua": "Est", "Abong-Mbang": "Est", "Batouri": "Est",
+            # Sud
+            "Ebolowa": "Sud", "Sangmélima": "Sud", "Kribi": "Sud",
+            # Adamaoua
+            "Ngaoundéré": "Adamaoua", "Ngaoundere": "Adamaoua", "Meiganga": "Adamaoua",
+            # Extrême-Nord
+            "Maroua": "Extrême-Nord", "Kousseri": "Extrême-Nord", "Mora": "Extrême-Nord",
+            # Nord-Ouest
+            "Bamenda": "Nord-Ouest", "Kumbo": "Nord-Ouest", "Wum": "Nord-Ouest",
+            # Sud-Ouest
+            "Buea": "Sud-Ouest", "Limbe": "Sud-Ouest", "Kumba": "Sud-Ouest",
+        }
+        # Index insensible à la casse
+        VILLE_REGION_LOWER = {k.lower(): v for k, v in VILLE_REGION.items()}
+
+        def get_region(ville: str) -> str:
+            return VILLE_REGION.get(ville) or VILLE_REGION_LOWER.get(ville.lower(), "")
+
         result   = await db.execute(select(Medecin).where(Medecin.statut == "valide"))
         medecins = result.scalars().all()
 
-        # Agrégation par ville (adresse = ville ou adresse complète)
+        # Groupement par ville — utilise md.ville en priorité
         ville_map: dict[str, dict] = {}
         for md in medecins:
-            ville  = (md.adresse or "Inconnue").split(",")[-1].strip()
-            region = getattr(md, "region", "") or ""
+            if md.ville:
+                ville = md.ville.strip()
+            elif md.adresse:
+                parts = [p.strip() for p in md.adresse.split(",")]
+                ville = parts[-1] if len(parts) > 1 else parts[0]
+            else:
+                ville = "Inconnue"
+
+            region = get_region(ville)
+
             if ville not in ville_map:
-                ville_map[ville] = {"ville": ville, "region": region, "medecins": 0, "consultations": 0}
-            ville_map[ville]["medecins"] += 1
-            count = await db.scalar(
+                ville_map[ville] = {
+                    "ville": ville, "region": region,
+                    "medecins": 0, "doctor_ids": [],
+                }
+            ville_map[ville]["medecins"]   += 1
+            ville_map[ville]["doctor_ids"].append(md.id)
+
+        # Consultations + patients distincts par ville
+        villes = []
+        for info in ville_map.values():
+            ids = info["doctor_ids"]
+            consultations = await db.scalar(
                 select(func.count()).select_from(Consultation)
                 .where(
-                    Consultation.medecin_id == md.id,
+                    Consultation.medecin_id.in_(ids),
                     Consultation.created_at >= debut,
                     Consultation.created_at <= fin,
                 )
             ) or 0
-            ville_map[ville]["consultations"] += count
-
-        villes = [
-            {"ville": v["ville"], "region": v["region"],
-             "medecins": v["medecins"], "consultations": v["consultations"], "patients": 0}
-            for v in ville_map.values()
-        ]
+            patients = await db.scalar(
+                select(func.count(func.distinct(Consultation.patient_id)))
+                .where(
+                    Consultation.medecin_id.in_(ids),
+                    Consultation.created_at >= debut,
+                    Consultation.created_at <= fin,
+                )
+            ) or 0
+            villes.append({
+                "ville":         info["ville"],
+                "region":        info["region"],
+                "medecins":      info["medecins"],
+                "consultations": consultations,
+                "patients":      patients,
+            })
 
         # Couverture par région (10 régions du Cameroun)
         REGIONS_CAMEROUN = [
@@ -1232,17 +1442,16 @@ class AdminService:
             "Sud", "Adamaoua", "Extrême-Nord", "Nord-Ouest", "Sud-Ouest",
         ]
         region_md: dict[str, int] = {}
-        for md in medecins:
-            reg = getattr(md, "region", None) or ""
+        for info in ville_map.values():
+            reg = info["region"]
             if reg:
-                region_md[reg] = region_md.get(reg, 0) + 1
+                region_md[reg] = region_md.get(reg, 0) + info["medecins"]
 
-        total_md = len(medecins) or 1
         regions  = [
             {
                 "region":     r,
                 "medecins":   region_md.get(r, 0),
-                "couverture": round(region_md.get(r, 0) / total_md * 100),
+                "couverture": min(region_md.get(r, 0) * 20, 100),
             }
             for r in REGIONS_CAMEROUN
         ]
@@ -1250,12 +1459,104 @@ class AdminService:
         return {"villes": villes, "regions": regions}
 
     @staticmethod
-    async def get_top_medecins_concordance(db: AsyncSession, limit: int = 5) -> list[dict]:
+    async def get_concordance_evolution(db: AsyncSession) -> list:
+        """
+        Concordance IA moyenne par mois sur les 6 derniers mois glissants.
+        Retourne : [{ m: "Jan", v: 85 }, ...]
+        """
+        from app.models.diagnostic_ia import DiagnosticIA
+
+        MOIS_COURTS = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Aoû","Sep","Oct","Nov","Déc"]
+        now    = datetime.utcnow()
+        result = []
+
+        for i in range(5, -1, -1):  # du plus ancien au plus récent
+            ty, tm = now.year, now.month - i
+            while tm <= 0:
+                tm += 12; ty -= 1
+            debut = datetime(ty, tm, 1)
+            fin   = datetime(ty, tm, calendar.monthrange(ty, tm)[1], 23, 59, 59)
+
+            diags = (await db.execute(
+                select(DiagnosticIA)
+                .where(DiagnosticIA.created_at >= debut, DiagnosticIA.created_at <= fin)
+            )).scalars().all()
+
+            scores = []
+            for d in diags:
+                maladies = d.maladies or []
+                if isinstance(maladies, list) and maladies:
+                    pct = maladies[0].get("pct")
+                    if pct is not None:
+                        scores.append(float(pct))
+
+            result.append({
+                "m": MOIS_COURTS[tm - 1],
+                "v": round(sum(scores) / len(scores)) if scores else 0,
+            })
+
+        return result
+
+    @staticmethod
+    async def get_concordance_pathologies(
+        db: AsyncSession, mois: int, annee: int
+    ) -> list:
+        """
+        Concordance IA moyenne par pathologie pour un mois donné.
+        Retourne : [{ p: "Pneumonie bactérienne", t: 87, nb: 12 }, ...]
+        """
+        from app.models.diagnostic_ia import DiagnosticIA
+
+        debut = datetime(annee, mois, 1)
+        fin   = datetime(annee, mois, calendar.monthrange(annee, mois)[1], 23, 59, 59)
+
+        diags = (await db.execute(
+            select(DiagnosticIA)
+            .where(DiagnosticIA.created_at >= debut, DiagnosticIA.created_at <= fin)
+        )).scalars().all()
+
+        patho_map: dict[str, dict] = {}
+        for d in diags:
+            maladies = d.maladies or []
+            if isinstance(maladies, list):
+                for maladie in maladies:
+                    nom = maladie.get("nom")
+                    pct = maladie.get("pct")
+                    if nom and pct is not None:
+                        if nom not in patho_map:
+                            patho_map[nom] = {"scores": [], "nb": 0}
+                        patho_map[nom]["scores"].append(float(pct))
+                        patho_map[nom]["nb"] += 1
+
+        result = [
+            {
+                "p":  nom,
+                "t":  round(sum(info["scores"]) / len(info["scores"])),
+                "nb": info["nb"],
+            }
+            for nom, info in patho_map.items()
+            if info["scores"]
+        ]
+        result.sort(key=lambda x: x["t"], reverse=True)
+        return result
+
+    @staticmethod
+    async def get_top_medecins_concordance(
+        db: AsyncSession, limit: int = 5,
+        mois: Optional[int] = None, annee: Optional[int] = None,
+    ) -> list[dict]:
         """
         Top N médecins triés par concordance IA décroissante.
-        Retourne : [{ id, nom, prenom, specialite, photo_url, concordance_ia, nb_consultations }]
+        Filtre par mois/année si fournis.
+        Retourne : [{ id, nom, prenom, specialite, photo_url, concordance_ia, nb_consultations, tendance }]
         """
         from app.models.consultation import Consultation
+
+        now   = datetime.utcnow()
+        m     = mois  or now.month
+        y     = annee or now.year
+        debut = datetime(y, m, 1)
+        fin   = datetime(y, m, calendar.monthrange(y, m)[1], 23, 59, 59)
 
         result = await db.execute(
             select(Medecin)
@@ -1266,26 +1567,28 @@ class AdminService:
 
         enriched = []
         for md in medecins:
-            consultations = md.consultations or []
+            # Consultations du mois sélectionné
+            cons_mois = [
+                c for c in (md.consultations or [])
+                if c.created_at and debut <= c.created_at <= fin
+            ]
             scores = []
-            for c in sorted(consultations, key=lambda x: x.created_at or datetime.min, reverse=True)[:30]:
-                if c.diagnostic and c.diagnostic.maladies:
-                    maladies = c.diagnostic.maladies
-                    if isinstance(maladies, list) and maladies:
-                        pct = maladies[0].get("pct")
-                        if pct is not None:
-                            scores.append(float(pct))
+            for c in cons_mois:
+                if c.diagnostic and isinstance(c.diagnostic.maladies, list) and c.diagnostic.maladies:
+                    pct = c.diagnostic.maladies[0].get("pct")
+                    if pct is not None:
+                        scores.append(float(pct))
             if not scores:
                 continue
             enriched.append({
                 "id":               md.id,
                 "nom":              md.nom,
                 "prenom":           md.prenom,
-                "specialite":       md.specialite,
+                "specialite":       md.specialite or "",
                 "photo_url":        build_url(md.photo_url),
                 "concordance_ia":   round(sum(scores) / len(scores)),
-                "nb_consultations": len(consultations),
-                "tendance":         "+",  # à calculer si tu as des données historiques
+                "nb_consultations": len(cons_mois),
+                "tendance":         0,
             })
 
         enriched.sort(key=lambda x: x["concordance_ia"], reverse=True)
@@ -1549,20 +1852,59 @@ class AdminService:
 
     @staticmethod
     async def supprimer_avis(db: AsyncSession, avis_id: str, admin_id: str) -> dict:
-        """Supprime un avis médecin."""
+        """Supprime un avis médecin et notifie le médecin par email."""
         from app.models.avis import Avis
 
-        result = await db.execute(select(Avis).where(Avis.id == avis_id))
-        avis   = result.scalar_one_or_none()
+        result = await db.execute(
+            select(Avis)
+            .where(Avis.id == avis_id)
+            .options(selectinload(Avis.medecin))
+        )
+        avis = result.scalar_one_or_none()
         if not avis:
             raise HTTPException(404, "Avis introuvable.")
+
+        medecin   = avis.medecin
+        nom_complet = f"{getattr(medecin, 'prenom', '')} {getattr(medecin, 'nom', '')}".strip()
+        email       = getattr(medecin, 'email', None)
+        contenu     = avis.contenu
+        note        = avis.note
 
         await db.delete(avis)
         await db.commit()
 
         await log_admin_action(db, admin_id, "avis_supprime",
-            details={"avis_id": avis_id})
-        return {"message": "Avis supprimé."}
+            details={"avis_id": avis_id, "medecin_email": email})
+
+        if email:
+            etoiles = "★" * note + "☆" * (5 - note)
+            await _send_email_smtp(
+                to_email=email,
+                to_name=nom_complet,
+                subject="Votre commentaire a été supprimé — PneumoIA",
+                html=f"""
+                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
+                      <h2 style="color:#009e82">PneumoIA — Modération des commentaires</h2>
+                      <p>Bonjour <strong>{nom_complet}</strong>,</p>
+                      <p>Nous vous informons que votre commentaire publié sur la plateforme PneumoIA
+                         a été <strong>supprimé par l'équipe d'administration</strong>.</p>
+                      <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;
+                                  padding:16px;margin:20px 0;font-style:italic;color:#374151">
+                        <p style="margin:0 0 6px 0;font-weight:bold;color:#6b7280;font-size:13px">
+                          Votre commentaire ({etoiles}) :</p>
+                        <p style="margin:0">"{contenu}"</p>
+                      </div>
+                      <p style="color:#6b7280;font-size:13px">
+                        Si vous avez des questions, contactez notre équipe de support.<br/>
+                        Vous pouvez soumettre un nouveau commentaire depuis votre espace médecin.
+                      </p>
+                      <p style="margin-top:24px">Cordialement,<br/>
+                         <strong>L'équipe PneumoIA</strong></p>
+                    </div>
+                """,
+            )
+
+        return {"message": "Avis supprimé.", "email_envoye": bool(email)}
 
     @staticmethod
     async def marquer_avis_vus(db: AsyncSession) -> dict:

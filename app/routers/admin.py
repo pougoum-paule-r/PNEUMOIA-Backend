@@ -409,6 +409,31 @@ async def repondre_question(
     return await AdminService.repondre_question(db, question_id, reponse, admin.id)
 
 
+@router.delete("/faq/questions/historique")
+async def vider_historique_questions(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Supprime définitivement toutes les questions répondues.
+    DELETE /api/admin/faq/questions/historique
+    """
+    return await AdminService.vider_historique_questions(db, admin.id)
+
+
+@router.delete("/faq/questions/{question_id}")
+async def supprimer_question(
+    question_id: str,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Supprime définitivement une question.
+    DELETE /api/admin/faq/questions/{id}
+    """
+    return await AdminService.supprimer_question(db, question_id, admin.id)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 10. FAQ — PUBLIÉES PAR L'ADMIN
 # ─────────────────────────────────────────────────────────────────────────────
@@ -535,6 +560,21 @@ async def get_consultations_semaine(
     return await AdminService.get_consultations_semaine(db)
 
 
+@router.get("/stats/consultations/jours")
+async def get_consultations_jours(
+    from_date: str  = Query(..., alias="from"),
+    to_date:   str  = Query(..., alias="to"),
+    db:        AsyncSession = Depends(get_db),
+    admin:     Admin        = Depends(get_current_admin),
+):
+    """
+    Consultations par jour sur une plage quelconque.
+    GET /api/admin/stats/consultations/jours?from=2026-05-11&to=2026-06-17
+    Retourne : [{ date: "2026-06-11", c: 5 }, ...]
+    """
+    return await AdminService.get_consultations_jours(db, from_date, to_date)
+
+
 @router.get("/stats/consultations/annee")
 async def get_consultations_annee(
     year:  int = Query(default=2026),
@@ -581,6 +621,34 @@ async def get_repartition_geo(
     return await AdminService.get_repartition_geo(db, mois, annee)
 
 
+@router.get("/stats/concordance/evolution")
+async def get_concordance_evolution(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Concordance IA moyenne par mois sur les 6 derniers mois glissants.
+    GET /api/admin/stats/concordance/evolution
+    Retourne : [{ m: "Jan", v: 85 }, ...]
+    """
+    return await AdminService.get_concordance_evolution(db)
+
+
+@router.get("/stats/concordance/pathologies")
+async def get_concordance_pathologies(
+    mois:  int = Query(...),
+    annee: int = Query(...),
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Concordance IA moyenne par pathologie pour un mois/année.
+    GET /api/admin/stats/concordance/pathologies?mois=6&annee=2026
+    Retourne : [{ p: "Pneumonie bactérienne", t: 87, nb: 12 }, ...]
+    """
+    return await AdminService.get_concordance_pathologies(db, mois, annee)
+
+
 @router.get("/stats/top-medecins-concordance")
 async def get_top_medecins_concordance(
     mois:  Optional[int] = None,
@@ -594,7 +662,7 @@ async def get_top_medecins_concordance(
     GET /api/admin/stats/top-medecins-concordance?mois=6&annee=2026
     Retourne : [{ id, prenom, nom, photo_url, concordance_ia, nb_consultations, tendance }]
     """
-    return await AdminService.get_top_medecins_concordance(db, limit)
+    return await AdminService.get_top_medecins_concordance(db, limit, mois=mois, annee=annee)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -837,3 +905,85 @@ async def marquer_avis_vus(
     PATCH /api/admin/avis/marquer-vus
     """
     return await AdminService.marquer_avis_vus(db)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 18. PATIENTS SUPPRIMÉS PAR LES MÉDECINS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/patients-supprimes")
+async def get_patients_supprimes(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    from datetime import timedelta
+    from app.models.patient import Patient
+    from app.models.medecin import Medecin
+
+    now = __import__('datetime').datetime.utcnow()
+    cutoff_hard  = now - timedelta(days=40)
+    cutoff_admin = now - timedelta(days=30)
+
+    # Hard-delete patients beyond J40
+    expired_res = await db.execute(
+        select(Patient).where(
+            Patient.deleted_at.is_not(None),
+            Patient.deleted_at <= cutoff_hard,
+        )
+    )
+    for p in expired_res.scalars().all():
+        await db.delete(p)
+    await db.flush()
+
+    # Return patients in admin phase: deleted_at between J30 and J40
+    rows = await db.execute(
+        select(Patient).where(
+            Patient.deleted_at.is_not(None),
+            Patient.deleted_at <= cutoff_admin,
+        ).order_by(Patient.deleted_at.asc())
+    )
+    patients = rows.scalars().all()
+
+    # Enrich with medecin info
+    medecin_ids = list({p.deleted_by for p in patients if p.deleted_by})
+    medecins_map = {}
+    if medecin_ids:
+        md_rows = await db.execute(select(Medecin).where(Medecin.id.in_(medecin_ids)))
+        medecins_map = {m.id: m for m in md_rows.scalars().all()}
+
+    result = []
+    for p in patients:
+        elapsed = (now - p.deleted_at).days
+        md = medecins_map.get(p.deleted_by)
+        result.append({
+            "id":           p.id,
+            "civilite":     p.civilite,
+            "nom":          p.nom,
+            "prenom":       p.prenom,
+            "deleted_at":   p.deleted_at.isoformat() + "Z" if p.deleted_at else None,
+            "jours_ecoules": elapsed,
+            "jours_restants": max(0, 40 - elapsed),
+            "medecin":      f"Dr. {md.prenom} {md.nom}" if md else None,
+            "medecin_id":   p.deleted_by,
+        })
+    await db.commit()
+    return result
+
+
+@router.patch("/patients-supprimes/{patient_id}/restaurer")
+async def restaurer_patient_supprime(
+    patient_id: str,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    from app.models.patient import Patient
+    patient = await db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient introuvable")
+    if patient.deleted_at is None:
+        raise HTTPException(400, "Ce patient n'est pas en corbeille")
+
+    patient.deleted_at = None
+    patient.deleted_by = None
+    await db.commit()
+    return {"message": "Patient restauré avec succès", "patient_id": patient_id}

@@ -15,6 +15,8 @@ from app.database import get_db
 from app.core.security import get_current_medecin
 from app.models.patient import Patient
 from app.models.acces_patient import AccesPatient
+from app.models.notification import Notification
+from app.models.admin import Admin
 from app.schemas.patient import PatientCreate, PatientOut, PatientSearchResult
 from app.schemas.consultation import AccesRequestIn, AccesRequestOut
 
@@ -265,13 +267,28 @@ async def corbeille_patients(
     db: AsyncSession = Depends(get_db),
     medecin=Depends(get_current_medecin),
 ):
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=40)
+    expired_res = await db.execute(
+        select(Patient)
+        .where(Patient.deleted_at.is_not(None))
+        .where(Patient.deleted_at <= cutoff)
+    )
+    expired_list = expired_res.scalars().all()
+    for p in expired_list:
+        await db.delete(p)
+    if expired_list:
+        await db.flush()
+
     result = await db.execute(
         select(Patient)
         .where(Patient.created_by == medecin.id)
         .where(Patient.deleted_at.is_not(None))
         .order_by(Patient.deleted_at.desc())
     )
-    return result.scalars().all()
+    patients = result.scalars().all()
+    await db.commit()
+    return patients
 
 
 # ── POST /patients/access-requests — Demander accès ──────────────
@@ -386,6 +403,20 @@ async def supprimer_patient(
 
     patient.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
     patient.deleted_by = medecin.id
+
+    admins = (await db.execute(select(Admin.id))).scalars().all()
+    medecin_name = f"Dr. {medecin.prenom} {medecin.nom}"
+    patient_name = f"{patient.civilite or ''} {patient.prenom} {patient.nom}".strip()
+    for admin_id in admins:
+        db.add(Notification(
+            destinataire_id=admin_id,
+            type_dest="admin",
+            type_notif="patient_supprime",
+            titre=f"Dossier patient en corbeille — {medecin_name}",
+            message=f"{medecin_name} a placé le dossier de {patient_name} en corbeille. Suppression définitive sous 40 jours si aucune restauration.",
+            meta={"patient_id": patient.id, "medecin_id": medecin.id, "lien": "/administrateur/patients-supprimes"},
+        ))
+
     await db.commit()
     return None
 
@@ -408,6 +439,45 @@ async def restaurer_patient(
     await db.commit()
     await db.refresh(patient)
     return patient
+
+
+# ── POST /patients/:id/demande-recuperation ──────────────────────
+@router.post("/{patient_id}/demande-recuperation", status_code=200)
+async def demander_recuperation(
+    patient_id: str,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from datetime import timedelta
+    patient = await db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient introuvable")
+    if patient.created_by != medecin.id:
+        raise HTTPException(403, "Accès refusé")
+    if patient.deleted_at is None:
+        raise HTTPException(400, "Ce patient n'est pas en corbeille")
+
+    elapsed = (datetime.now(timezone.utc).replace(tzinfo=None) - patient.deleted_at).days
+    if elapsed < 30:
+        raise HTTPException(400, "Ce dossier est encore dans votre corbeille. Restaurez-le directement.")
+    if elapsed >= 40:
+        raise HTTPException(400, "La période de récupération est expirée.")
+
+    admins = (await db.execute(select(Admin.id))).scalars().all()
+    medecin_name = f"Dr. {medecin.prenom} {medecin.nom}"
+    patient_name = f"{patient.civilite or ''} {patient.prenom} {patient.nom}".strip()
+    jours_restants = 40 - elapsed
+    for admin_id in admins:
+        db.add(Notification(
+            destinataire_id=admin_id,
+            type_dest="admin",
+            type_notif="demande_recuperation_patient",
+            titre=f"Demande de récupération — {medecin_name}",
+            message=f"{medecin_name} demande la récupération du dossier de {patient_name}. Il reste {jours_restants} jour(s) avant suppression définitive.",
+            meta={"patient_id": patient.id, "medecin_id": medecin.id, "lien": "/administrateur/patients-supprimes"},
+        ))
+    await db.commit()
+    return {"message": "Demande envoyée à l'administrateur"}
 
 
 # ── GET /patients/:id/consultations ──────────────────────────────
