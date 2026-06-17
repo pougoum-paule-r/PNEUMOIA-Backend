@@ -42,19 +42,25 @@ async def push_notif(
     titre:      str,
     message:    str = "",
     meta:       dict | None = None,
+    force:      bool = False,  # True = bypass préférences (notifs opérationnelles critiques)
 ) -> Notification | None:
-    if not await _prefs_allow(db, dest_id, type_dest):
+    if not force and not await _prefs_allow(db, dest_id, type_dest):
         return None
 
-    n = Notification(
-        destinataire_id = dest_id,
-        type_dest       = type_dest,
-        type_notif      = type_notif,
-        titre           = titre,
-        message         = message,
-        meta            = meta or {},
-    )
-    db.add(n)
-    # Flush sans commit — le commit est fait par le router appelant
-    await db.flush()
-    return n
+    try:
+        n = Notification(
+            destinataire_id = dest_id,
+            type_dest       = type_dest,
+            type_notif      = type_notif,
+            titre           = titre,
+            message         = message,
+            meta            = meta or {},
+        )
+        db.add(n)
+        # Flush sans commit — le commit est fait par le router appelant
+        await db.flush()
+        return n
+    except Exception as e:
+        import sys
+        print(f"[push_notif] ERREUR insertion notification {type_notif} → {dest_id}: {e}", file=sys.stderr)
+        return None

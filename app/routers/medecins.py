@@ -1,5 +1,6 @@
 # app/routers/medecins.py
-from fastapi import APIRouter, Depends
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from app.models.patient import Patient
 from app.models.consultation import Consultation
 from app.models.diagnostic_ia import DiagnosticIA
 from app.models.feedback_ia import FeedbackIA
+from app.models.avis import Avis
 
 router_medecins = APIRouter(prefix="/api/v1/medecins", tags=["Médecins"])
 
@@ -42,6 +44,12 @@ _PREFS_MEDECIN_DEFAULTS = {
     "anonymisationCas":         True,
     "accepteDemandes":          True,
 }
+
+class AvisIn(BaseModel):
+    note: int
+    commentaire: str
+    ville: Optional[str] = None
+
 
 class PreferencesMedecinRequest(BaseModel):
     emailNotifications:           Optional[bool] = None
@@ -276,25 +284,85 @@ async def top4_medecins(db: AsyncSession = Depends(get_db)):
     return scores[:4]
 
 
+# ── GET /mes-avis — liste de tous mes témoignages ─────────────────
+@router_medecins.get("/mes-avis", tags=["Médecins"])
+async def get_mes_avis(
+    medecin: Medecin      = Depends(get_current_medecin),
+    db:      AsyncSession = Depends(get_db),
+):
+    """Retourne tous les témoignages soumis par le médecin connecté."""
+    r = await db.execute(
+        select(Avis)
+        .where(Avis.medecin_id == medecin.id)
+        .order_by(Avis.created_at.desc())
+    )
+    avis_list = r.scalars().all()
+    return [
+        {
+            "id":          a.id,
+            "note":        a.note,
+            "commentaire": a.commentaire,
+            "ville":       a.ville or "",
+            "statut":      "publie",
+            "date":        a.created_at.strftime("%Y-%m-%d"),
+        }
+        for a in avis_list
+    ]
+
+
+# ── POST /mon-avis — créer un nouveau témoignage ──────────────────
+@router_medecins.post("/mon-avis", tags=["Médecins"])
+async def creer_avis(
+    body:    AvisIn,
+    medecin: Medecin      = Depends(get_current_medecin),
+    db:      AsyncSession = Depends(get_db),
+):
+    """Crée un nouveau témoignage (un médecin peut en soumettre plusieurs)."""
+    if not 1 <= body.note <= 5:
+        raise HTTPException(422, "Note doit être entre 1 et 5")
+    if not body.commentaire.strip():
+        raise HTTPException(422, "Commentaire requis")
+
+    nouveau = Avis(
+        medecin_id    = medecin.id,
+        prenom        = medecin.prenom,
+        nom           = medecin.nom,
+        civilite      = getattr(medecin, "civilite", None),
+        specialite    = medecin.specialite or "Pneumologue",
+        etablissement = medecin.etablissement or "",
+        ville         = (body.ville or "").strip(),
+        photo_url     = _photo_url(medecin.photo_url),
+        note          = body.note,
+        commentaire   = body.commentaire.strip(),
+    )
+    db.add(nouveau)
+    await db.commit()
+    await db.refresh(nouveau)
+    return {
+        "id":          nouveau.id,
+        "note":        nouveau.note,
+        "commentaire": nouveau.commentaire,
+        "ville":       nouveau.ville or "",
+        "statut":      "publie",
+        "date":        nouveau.created_at.strftime("%Y-%m-%d"),
+    }
+
+
 @router_medecins.get("/public/temoignages", tags=["Public"])
 async def public_temoignages(db: AsyncSession = Depends(get_db)):
-    """Retourne les vrais commentaires de feedback IA laissés par les médecins validés."""
+    """Retourne les témoignages soumis par les médecins (table Avis uniquement)."""
     r = await db.execute(
-        select(FeedbackIA, Medecin)
-        .join(Medecin, FeedbackIA.medecin_id == Medecin.id)
-        .where(
-            FeedbackIA.commentaire.isnot(None),
-            FeedbackIA.commentaire != "",
-            Medecin.statut == "valide",
-        )
-        .order_by(FeedbackIA.created_at.desc())
-        .limit(12)
+        select(Avis, Medecin)
+        .join(Medecin, Avis.medecin_id == Medecin.id)
+        .where(Medecin.statut == "valide")
+        .order_by(Avis.created_at.desc())
+        .limit(6)
     )
     rows = r.all()
 
     seen = set()
     results = []
-    for feedback, medecin in rows:
+    for avis, medecin in rows:
         if medecin.id not in seen:
             seen.add(medecin.id)
             results.append({
@@ -303,11 +371,12 @@ async def public_temoignages(db: AsyncSession = Depends(get_db)):
                 "specialite": medecin.specialite or "Pneumologue",
                 "hopital":    medecin.etablissement or "",
                 "photo_url":  _photo_url(medecin.photo_url),
-                "texte":      feedback.commentaire,
-                "date":       feedback.created_at.strftime("%d.%m.%Y"),
+                "texte":      avis.commentaire,
+                "note":       avis.note,
+                "ville":      avis.ville or "",
+                "date":       avis.created_at.strftime("%d.%m.%Y"),
             })
-        if len(results) >= 6:
-            break
+
     return results
 
 

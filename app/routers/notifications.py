@@ -153,5 +153,5 @@ def _serialize(n: Notification) -> dict:
         "message":        n.message,
         "meta":           n.meta or {},
         "lu":             n.lu,
-        "created_at":     n.created_at.isoformat(),
+        "created_at":     n.created_at.isoformat() + "Z",
     }

@@ -24,6 +24,7 @@ from app.models.ressource           import RessourceMedicale
 from app.models.message_equipe      import MessageEquipe, LikeMessageEquipe
 from app.models.commentaire         import LikeCommentaire  # Commentaire already imported above
 from app.models.question_admin      import QuestionAdmin
+from app.models.avis                import Avis
 
 __all__ = [
     "Admin",
@@ -52,4 +53,5 @@ __all__ = [
     "MessageEquipe",
     "LikeMessageEquipe",
     "QuestionAdmin",
+    "Avis",
 ]

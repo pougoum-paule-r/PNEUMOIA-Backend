@@ -49,10 +49,14 @@ class Patient(Base):
     # }
 
     # ── Méta ─────────────────────────────────────────────────────
-    created_by = Column(String(15), ForeignKey("medecins.id",       ondelete="SET NULL"), nullable=True)
-    aide_id    = Column(String(15), ForeignKey("aides_soignants.id",ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime,   nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime,   nullable=True,  onupdate=datetime.utcnow)
+    # created_by      = FK vers médecin (quand c'est le médecin qui crée)
+    # aide_id         = FK vers aide soignant (quand c'est l'aide qui crée ou gère le patient)
+    # created_by_aide = FK vers aide soignant qui a saisi le dossier (immuable)
+    created_by      = Column(String(15), ForeignKey("medecins.id",       ondelete="SET NULL"), nullable=True)
+    aide_id         = Column(String(15), ForeignKey("aides_soignants.id",ondelete="SET NULL"), nullable=True)
+    created_by_aide = Column(String(15), ForeignKey("aides_soignants.id",ondelete="SET NULL"), nullable=True)
+    created_at      = Column(DateTime,   nullable=False, default=datetime.utcnow)
+    updated_at      = Column(DateTime,   nullable=True,  onupdate=datetime.utcnow)
 
     # ── Soft-delete ───────────────────────────────────────────────
     deleted_at = Column(DateTime,   nullable=True, default=None)
