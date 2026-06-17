@@ -1,3 +1,6 @@
+# Claude Code config
+.claude/
+
 # Python / Backend
 __pycache__/
 *.pyc
