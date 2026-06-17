@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import smtplib
+import ssl
 from datetime import datetime, timedelta
 from email.mime.text      import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -41,14 +42,15 @@ def _smtp_send_sync(to_email: str, subject: str, html: str) -> None:
     msg["To"]      = to_email
     msg.attach(MIMEText(html, "html"))
 
+    ctx = ssl.create_default_context()
     if settings.SMTP_PORT == 465:
-        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
+        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15, context=ctx) as server:
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.sendmail(settings.FROM_EMAIL, to_email, msg.as_string())
     else:
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
             server.ehlo()
-            server.starttls()
+            server.starttls(context=ctx)
             server.ehlo()
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.sendmail(settings.FROM_EMAIL, to_email, msg.as_string())

@@ -115,8 +115,7 @@ async def list_publications(
 
     if mine:
         stmt = stmt.where(Publication.auteur_id == actor["id"])
-    else:
-        stmt = stmt.where(Publication.publie == True)  # noqa: E712
+    # else: pas de filtre publie (le modèle n'a pas ce champ — toutes les publications sont visibles)
 
     if type_p and type_p in ("cas_clinique", "question", "article", "discussion"):
         stmt = stmt.where(Publication.type == type_p)

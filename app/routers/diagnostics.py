@@ -538,17 +538,29 @@ async def predict_and_save(
         maladies, recommandations_principales
     )
 
-    # 5. Sauvegarder dans diagnostics_ia
+    # 5. Sauvegarder dans diagnostics_ia (upsert : mise à jour si déjà existant)
     from app.models.diagnostic_ia import DiagnosticIA
-    diag = DiagnosticIA(
-        consultation_id    = body.consultation_id,
-        maladies           = maladies,
-        recommandations    = recommandations_principales,
-        etat_patient       = etat_patient,
-        version_modele     = "equipe" if est_equipe else "base",
-        duree_inference_ms = 0,
+    from sqlalchemy import select as _select
+    existing = await db.execute(
+        _select(DiagnosticIA).where(DiagnosticIA.consultation_id == body.consultation_id)
     )
-    db.add(diag)
+    diag = existing.scalars().first()
+    if diag:
+        diag.maladies           = maladies
+        diag.recommandations    = recommandations_principales
+        diag.etat_patient       = etat_patient
+        diag.version_modele     = "equipe" if est_equipe else "base"
+        diag.duree_inference_ms = 0
+    else:
+        diag = DiagnosticIA(
+            consultation_id    = body.consultation_id,
+            maladies           = maladies,
+            recommandations    = recommandations_principales,
+            etat_patient       = etat_patient,
+            version_modele     = "equipe" if est_equipe else "base",
+            duree_inference_ms = 0,
+        )
+        db.add(diag)
     await db.commit()
     await db.refresh(diag)
 
