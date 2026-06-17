@@ -1,6 +1,6 @@
 # app/routers/consultations.py
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -293,10 +293,9 @@ async def sauvegarder_opinion(
     # Partage
     c.partage = payload.partage.model_dump()
 
-    # Statut avis médecin
+    # Statut avis médecin — on exclut recommandations (auto-rempli par l'IA)
     a_donne_avis = bool(
-        payload.observations or payload.medicaments or
-        payload.recommandations or payload.conseils_maison
+        payload.observations or payload.medicaments or payload.conseils_maison
     )
     c.statut = "terminee" if a_donne_avis else "en_attente"
 
@@ -354,8 +353,8 @@ async def telecharger_pdf(
     from app.services.pdf_service import generer_bilan_pdf
     pdf_bytes = await generer_bilan_pdf(consultation=c, patient=patient, diag=diag)
 
-    return StreamingResponse(
-        iter([pdf_bytes]),
+    return Response(
+        content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="bilan_{consultation_id}.pdf"'},
     )

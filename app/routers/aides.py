@@ -126,8 +126,11 @@ async def _send_email(to: str, subject: str, html: str, aide: "AideSoignant | No
             return
     try:
         await smtp_send(to, subject, html)
-        logger.info("Email envoyé → %s", to)
+        import sys
+        print(f"[EMAIL OK] → {to} : {subject}", file=sys.stderr)
     except Exception as e:
+        import sys
+        print(f"[EMAIL ERREUR] → {to} : {e}", file=sys.stderr)
         logger.warning("Email non envoyé → %s : %s", to, e)
 
 
@@ -707,23 +710,49 @@ async def creer_patient_aide(
         antecedents          = body.antecedents or {},
         created_by           = aide.medecin_id,
         aide_id              = aide.id,
+        created_by_aide      = aide.id,
     )
     db.add(patient)
     await db.flush()
 
     from app.services.notification_service import push_notif
-    await push_notif(
-        db,
-        dest_id   = aide.medecin_id,
-        type_dest = "medecin",
-        type_notif= "aide_nouveau_patient",
-        titre     = "Nouveau patient créé",
-        message   = f"{aide.prenom} {aide.nom} a créé le dossier de {body.prenom} {body.nom.upper()}.",
-        meta      = {"lien": "/medecin/patients"},
-    )
+    from app.models.medecin import Medecin
+    medecin = await db.get(Medecin, aide.medecin_id) if aide.medecin_id else None
+
+    if aide.medecin_id:
+        await push_notif(
+            db,
+            dest_id   = aide.medecin_id,
+            type_dest = "medecin",
+            type_notif= "aide_nouveau_patient",
+            titre     = "Nouveau patient créé",
+            message   = f"{aide.prenom} {aide.nom} a créé le dossier de {body.prenom} {body.nom.upper()}.",
+            meta      = {"lien": "/medecin/patients"},
+            force     = True,
+        )
 
     await db.commit()
     await db.refresh(patient)
+
+    # Email au médecin référent
+    if medecin and medecin.email:
+        import asyncio
+        asyncio.create_task(_send_email(
+            to      = medecin.email,
+            subject = "🩺 PneumoIA — Nouveau patient créé par votre aide soignant",
+            html    = f"""
+            <div style="font-family:sans-serif;max-width:500px;margin:auto">
+              <h2 style="color:#2563EB">Nouveau dossier patient</h2>
+              <p>Bonjour {medecin.civilite or 'Dr'} {medecin.prenom} {medecin.nom},</p>
+              <p><strong>{aide.prenom} {aide.nom}</strong> (aide soignant) a créé un nouveau dossier patient :</p>
+              <div style="background:#f0f4ff;padding:12px;border-radius:8px;margin:12px 0">
+                <p style="margin:0;font-size:16px;font-weight:bold">{body.prenom} {body.nom.upper()}</p>
+              </div>
+              <p>Connectez-vous à PneumoIA pour consulter le dossier.</p>
+              <p style="color:#6b7280;font-size:13px">Cet email a été généré automatiquement.</p>
+            </div>
+            """,
+        ))
     return {
         "id":     patient.id,
         "nom":    patient.nom,

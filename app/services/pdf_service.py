@@ -208,8 +208,8 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         story.append(pat_t)
         story.append(Spacer(1, 14))
 
-        # ── DIAGNOSTIC IA ──────────────────────────────────────────
-        story.append(Paragraph("Diagnostic IA", S_SEC))
+        # ── DIAGNOSTIC ─────────────────────────────────────────────
+        story.append(Paragraph("Diagnostic", S_SEC))
         story.append(Spacer(1, 4))
 
         if principale:
@@ -220,11 +220,10 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
 
             diag_rows = [
                 [Paragraph("Pathologie principale", S_LBL), Paragraph(principale.get("nom","—"), S_VAL_BLUE)],
-                [Paragraph("Confiance IA",           S_LBL), Paragraph(f"{principale.get('pct',0)}%", S_VAL)],
-                [Paragraph("État clinique",           S_LBL), Paragraph(etat_label, etat_style)],
+                [Paragraph("État clinique",          S_LBL), Paragraph(etat_label, etat_style)],
             ]
             if len(maladies) > 1:
-                diff_txt = " · ".join(f"{m['nom']} ({m['pct']}%)" for m in maladies[1:4])
+                diff_txt = " · ".join(m['nom'] for m in maladies[1:4])
                 diag_rows.append([Paragraph("Diagnostics différentiels", S_LBL), Paragraph(diff_txt, S_VAL)])
 
             diag_t = Table(diag_rows, colWidths=[W*0.36, W*0.64])
@@ -282,10 +281,10 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
             story.append(exam_t)
             story.append(Spacer(1, 14))
 
-        # ── RECOMMANDATIONS IA ────────────────────────────────────
+        # ── RECOMMANDATIONS ───────────────────────────────────────
         recommandations = (diag.recommandations if diag else None) or principale.get("recommandations", [])
         if recommandations:
-            story.append(Paragraph("Recommandations IA", S_SEC))
+            story.append(Paragraph("Recommandations médicales", S_SEC))
             story.append(Spacer(1, 4))
             reco_rows = [[Paragraph(f"✓  {r}", S_BULLET)] for r in recommandations]
             reco_t = Table(reco_rows, colWidths=[W])
@@ -335,7 +334,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         # ── PIED DE PAGE ──────────────────────────────────────────
         story.append(HRFlowable(width="100%", thickness=0.5, color=C_GRAY_BDR, spaceAfter=6))
         story.append(Paragraph(
-            "Document généré par <b>PneumoIA</b> — Plateforme de diagnostic pneumologique assisté par IA<br/>"
+            "Document généré par <b>PneumoIA</b> — Plateforme de suivi pneumologique<br/>"
             "Ce document est confidentiel et destiné exclusivement au patient et à son équipe médicale.",
             S_FOOTER))
 

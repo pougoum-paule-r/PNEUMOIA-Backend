@@ -349,10 +349,10 @@ async def predict(
     else:
         features_dict = {
             'AGE': body.age, 'Gender': body.gender, 'smoke': body.smoke,
-            'FVC': body.fvc if body.fvc is not None else np.nan,
-            'FEC1': body.fec1 if body.fec1 is not None else np.nan,
-            'FEV1_FVC_Ratio': body.fev1_fvc_ratio if body.fev1_fvc_ratio is not None else np.nan,
-            'Peak_Flow': body.peak_flow if body.peak_flow is not None else np.nan,
+            'FVC':            body.fvc          if body.fvc          is not None else 0,
+            'FEC1':           body.fec1         if body.fec1         is not None else 0,
+            'FEV1_FVC_Ratio': body.fev1_fvc_ratio if body.fev1_fvc_ratio is not None else 0,
+            'Peak_Flow':      body.peak_flow    if body.peak_flow    is not None else 0,
             'PEFR': body.pefr, 'O2': body.o2, 'Scan': body.scan,
             'Asthama': body.asthma, 'Other diseaes': body.other_diseases,
         }
@@ -498,10 +498,10 @@ async def predict_and_save(
     else:
         features_dict = {
             'AGE': body.age, 'Gender': body.gender, 'smoke': body.smoke,
-            'FVC': body.fvc if body.fvc is not None else np.nan,
-            'FEC1': body.fec1 if body.fec1 is not None else np.nan,
-            'FEV1_FVC_Ratio': body.fev1_fvc_ratio if body.fev1_fvc_ratio is not None else np.nan,
-            'Peak_Flow': body.peak_flow if body.peak_flow is not None else np.nan,
+            'FVC':            body.fvc          if body.fvc          is not None else 0,
+            'FEC1':           body.fec1         if body.fec1         is not None else 0,
+            'FEV1_FVC_Ratio': body.fev1_fvc_ratio if body.fev1_fvc_ratio is not None else 0,
+            'Peak_Flow':      body.peak_flow    if body.peak_flow    is not None else 0,
             'PEFR': body.pefr, 'O2': body.o2, 'Scan': body.scan,
             'Asthama': body.asthma, 'Other diseaes': body.other_diseases,
         }

@@ -115,6 +115,8 @@ async def list_publications(
 
     if mine:
         stmt = stmt.where(Publication.auteur_id == actor["id"])
+    else:
+        stmt = stmt.where(Publication.publie == True)  # noqa: E712
 
     if type_p and type_p in ("cas_clinique", "question", "article", "discussion"):
         stmt = stmt.where(Publication.type == type_p)
@@ -510,7 +512,7 @@ def _serialize_commentaire(c: Commentaire, current_user_id: str) -> dict:
         "id":      c.id,
         "author":  _author_from_com(c),
         "text":    c.contenu,
-        "time":    c.created_at.isoformat(),
+        "time":    c.created_at.isoformat() + "Z",
         "likes":   c.likes_count,
         "liked":   current_user_id in liked_ids,
         "isMe":    (c.auteur_id == current_user_id or c.auteur_aide_id == current_user_id),
@@ -529,11 +531,12 @@ def _serialize_publication(pub: Publication, actor: dict, with_comments: bool = 
 
     base = {
         "id":             pub.id,
+        "auteur_id":      pub.auteur_id,
         "casTitle":       pub.titre,
         "casId":          pub.id,
         "author":         _author_from_pub(pub),
         "text":           pub.contenu or "",
-        "time":           pub.created_at.isoformat(),
+        "time":           pub.created_at.isoformat() + "Z",
         "type":           pub.type,
         "tags":           pub.tags or [],
         "nb_commentaires": pub.nb_commentaires,
