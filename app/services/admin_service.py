@@ -1845,7 +1845,8 @@ class AdminService:
                 "etablissement":a.medecin.etablissement if a.medecin else None,
                 "ville":        a.medecin.ville         if a.medecin else None,
                 "note":         a.note,
-                "commentaire":  a.contenu,
+                "commentaire":  a.commentaire,
+                "statut":       getattr(a, "statut", "publie"),
                 "created_at":   a.created_at.isoformat() if a.created_at else None,
                 "vu":           a.vu,
             }
@@ -1853,60 +1854,44 @@ class AdminService:
         ]
 
     @staticmethod
-    async def supprimer_avis(db: AsyncSession, avis_id: str, admin_id: str) -> dict:
-        """Supprime un avis médecin et notifie le médecin par email."""
+    async def supprimer_avis(db: AsyncSession, avis_id: str, admin_id: str, raison: Optional[str] = None) -> dict:
+        """Supprime un avis médecin et notifie le médecin sur la plateforme."""
         from app.models.avis import Avis
 
         result = await db.execute(
             select(Avis)
             .where(Avis.id == avis_id)
-            .options(selectinload(Avis.medecin))
         )
         avis = result.scalar_one_or_none()
         if not avis:
             raise HTTPException(404, "Avis introuvable.")
 
-        medecin   = avis.medecin
-        nom_complet = f"{getattr(medecin, 'prenom', '')} {getattr(medecin, 'nom', '')}".strip()
-        email       = getattr(medecin, 'email', None)
-        contenu     = avis.contenu
-        note        = avis.note
-
+        medecin_id = avis.medecin_id
         await db.delete(avis)
         await db.commit()
 
         await log_admin_action(db, admin_id, "avis_supprime",
-            details={"avis_id": avis_id, "medecin_email": email})
+            details={"avis_id": avis_id, "medecin_id": medecin_id})
 
-        if email:
-            etoiles = "★" * note + "☆" * (5 - note)
-            await _send_email_smtp(
-                to_email=email,
-                to_name=nom_complet,
-                subject="Votre commentaire a été supprimé — PneumoIA",
-                html=f"""
-                    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:32px">
-                      <h2 style="color:#009e82">PneumoIA — Modération des commentaires</h2>
-                      <p>Bonjour <strong>{nom_complet}</strong>,</p>
-                      <p>Nous vous informons que votre commentaire publié sur la plateforme PneumoIA
-                         a été <strong>supprimé par l'équipe d'administration</strong>.</p>
-                      <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;
-                                  padding:16px;margin:20px 0;font-style:italic;color:#374151">
-                        <p style="margin:0 0 6px 0;font-weight:bold;color:#6b7280;font-size:13px">
-                          Votre commentaire ({etoiles}) :</p>
-                        <p style="margin:0">"{contenu}"</p>
-                      </div>
-                      <p style="color:#6b7280;font-size:13px">
-                        Si vous avez des questions, contactez notre équipe de support.<br/>
-                        Vous pouvez soumettre un nouveau commentaire depuis votre espace médecin.
-                      </p>
-                      <p style="margin-top:24px">Cordialement,<br/>
-                         <strong>L'équipe PneumoIA</strong></p>
-                    </div>
-                """,
+        # Notification en-plateforme pour le médecin
+        try:
+            from app.services.notification_service import push_notif
+            raison_msg = f" Raison : {raison}" if raison else ""
+            await push_notif(
+                db,
+                dest_id   = medecin_id,
+                type_dest = "medecin",
+                type_notif= "temoignage_supprime",
+                titre     = "Votre témoignage a été retiré",
+                message   = f"L'administrateur a supprimé votre témoignage de la page d'accueil.{raison_msg}",
+                meta      = {"lien": "/medecin/commentaires"},
+                force     = True,
             )
+            await db.commit()
+        except Exception as _e:
+            import logging; logging.getLogger(__name__).warning("push_notif temoignage: %s", _e)
 
-        return {"message": "Avis supprimé.", "email_envoye": bool(email)}
+        return {"message": "Avis supprimé."}
 
     @staticmethod
     async def marquer_avis_vus(db: AsyncSession) -> dict:
@@ -1922,3 +1907,17 @@ class AdminService:
         await db.commit()
 
         return {"message": f"{count} avis marqué(s) comme vu(s).", "count": count}
+
+    @staticmethod
+    async def approuver_avis(db: AsyncSession, avis_id: str) -> dict:
+        """Approuve un avis → le rend visible sur la landing page."""
+        from app.models.avis import Avis
+
+        result = await db.execute(select(Avis).where(Avis.id == avis_id))
+        avis = result.scalar_one_or_none()
+        if not avis:
+            raise HTTPException(404, "Avis introuvable.")
+        avis.statut = "publie"
+        avis.vu     = True
+        await db.commit()
+        return {"message": "Avis approuvé.", "id": avis_id}

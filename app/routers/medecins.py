@@ -334,6 +334,7 @@ async def creer_avis(
         photo_url     = _photo_url(medecin.photo_url),
         note          = body.note,
         commentaire   = body.commentaire.strip(),
+        statut        = "publie",
     )
     db.add(nouveau)
     await db.commit()
@@ -354,7 +355,7 @@ async def public_temoignages(db: AsyncSession = Depends(get_db)):
     r = await db.execute(
         select(Avis, Medecin)
         .join(Medecin, Avis.medecin_id == Medecin.id)
-        .where(Medecin.statut == "valide")
+        .where(Medecin.statut == "valide", Avis.statut == "publie")
         .order_by(Avis.created_at.desc())
         .limit(6)
     )

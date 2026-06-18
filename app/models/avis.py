@@ -28,6 +28,7 @@ class Avis(Base):
 
     note          = Column(Integer,     nullable=False, default=5)
     commentaire   = Column(Text,        nullable=False)
+    statut        = Column(String(20),  nullable=False, default="publie")
     vu            = Column(Boolean,     nullable=False, default=False)
     created_at    = Column(DateTime,    nullable=False, default=datetime.utcnow)
 

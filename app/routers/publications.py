@@ -202,6 +202,24 @@ async def create_publication(
     except Exception as _e:
         import logging; logging.getLogger(__name__).warning("push_notif pub: %s", _e)
 
+    # Notifier tous les admins
+    try:
+        from app.services.notification_service import push_notif as _pn
+        from app.models.admin import Admin as _Admin
+        from app.models.notification import Notification as _Notif
+        _admins_r = await db.execute(select(_Admin.id))
+        for _admin_id in _admins_r.scalars().all():
+            db.add(_Notif(
+                destinataire_id = _admin_id,
+                type_dest       = "admin",
+                type_notif      = "nouvelle_publication",
+                titre           = f"Nouvelle publication — {actor['nom']}",
+                message         = f"« {pub.titre} » ({pub.type.replace('_', ' ')})",
+                meta            = {"pub_id": pub.id, "lien": "/administrateur/commentaires"},
+            ))
+    except Exception as _e:
+        import logging; logging.getLogger(__name__).warning("notif admin pub: %s", _e)
+
     await db.commit()
     await db.refresh(pub)
     return _serialize_publication(pub, actor)

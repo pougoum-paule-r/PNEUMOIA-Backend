@@ -21,7 +21,7 @@ Organisation :
    17. Avis / commentaires         → liste, supprimer, marquer vus
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from typing import Optional
@@ -882,17 +882,21 @@ async def get_avis(
     return await AdminService.get_avis(db)
 
 
+class AvisDeleteBody(BaseModel):
+    raison: Optional[str] = None
+
 @router.delete("/avis/{avis_id}")
 async def supprimer_avis(
     avis_id: str,
-    db:      AsyncSession = Depends(get_db),
-    admin:   Admin        = Depends(get_current_admin),
+    body:    AvisDeleteBody = Body(default=AvisDeleteBody()),
+    db:      AsyncSession   = Depends(get_db),
+    admin:   Admin          = Depends(get_current_admin),
 ):
     """
-    Supprime un avis. Le médecin est notifié par email.
+    Supprime un avis. Le médecin est notifié sur la plateforme (et par email).
     DELETE /api/admin/avis/{id}
     """
-    return await AdminService.supprimer_avis(db, avis_id, admin.id)
+    return await AdminService.supprimer_avis(db, avis_id, admin.id, body.raison)
 
 
 @router.patch("/avis/marquer-vus")
