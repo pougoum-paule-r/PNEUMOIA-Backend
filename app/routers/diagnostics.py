@@ -149,6 +149,35 @@ ALERTES_GROUPE_SANGUIN = {
 }
 
 
+_NIVEAUX = {"critique": 3, "urgent": 2, "surveille": 1, "stable": 0}
+
+
+def _etat_depuis_seuils(etat_ml: str, symptomes: dict, body) -> str:
+    """Escalade l'état ML si les seuils cliniques objectifs l'exigent."""
+    spo2 = symptomes.get("saturation_o2")
+    temp = symptomes.get("temperature") or symptomes.get("fievre_temperature")
+    fc   = symptomes.get("frequence_cardiaque")
+    fr   = symptomes.get("frequence_respiratoire")
+
+    etat = etat_ml
+
+    # Critique : SpO2 < 90 OU fièvre ≥ 40 °C
+    if (spo2 and float(spo2) < 90) or (temp and float(temp) >= 40.0):
+        etat = "critique"
+    # Urgent : SpO2 < 94 OU fièvre ≥ 38.5 °C OU flag O2 anormal OU FC > 120 OU FR > 30
+    elif (
+        (spo2 and float(spo2) < 94)
+        or (temp and float(temp) >= 38.5)
+        or body.o2 == 1
+        or (fc and (float(fc) > 120 or float(fc) < 50))
+        or (fr and float(fr) > 30)
+    ):
+        if _NIVEAUX.get(etat, 0) < _NIVEAUX["urgent"]:
+            etat = "urgent"
+
+    return etat
+
+
 def _appliquer_alertes(body_religion, body_groupe_sanguin, prediction, probabilities, maladies, recommandations_principales):
     """Centralise la logique d'alertes religion + groupe sanguin."""
     alertes = []
@@ -531,6 +560,9 @@ async def predict_and_save(
 
     etat_patient = maladies[0]["etat"] if maladies else "stable"
 
+    # Escalade par seuils cliniques objectifs (SpO2, température, FC, FR…)
+    etat_patient = _etat_depuis_seuils(etat_patient, symptomes_bdd, body)
+
     # 4. Alertes religion + groupe sanguin
     recommandations_principales = RECOMMANDATIONS.get(prediction, [])
     alertes, recommandations_principales = _appliquer_alertes(
@@ -561,6 +593,12 @@ async def predict_and_save(
             duree_inference_ms = 0,
         )
         db.add(diag)
+
+    # Propager immédiatement l'état clinique vers la consultation
+    # → visible dans cas-graves dès le diagnostic, sans attendre l'étape 4
+    if etat_patient in ("urgent", "critique", "surveille"):
+        c.statut_clinique = etat_patient
+
     await db.commit()
     await db.refresh(diag)
 

@@ -104,7 +104,8 @@ async def get_stats(
         if row.pathologie
     ]
 
-    # ── 4. Concordance IA/Médecin — filtrée par période ──────────────────────
+    # ── 4. Concordance IA/Médecin — toujours sur 7 semaines glissantes ───────
+    start_7w   = now - timedelta(weeks=7)
     week_col   = func.date_trunc("week", FeedbackIA.created_at).label("semaine")
     conc_float = _bool_to_float(FeedbackIA.concordance)
     res = await db.execute(
@@ -116,19 +117,27 @@ async def get_stats(
         .join(DiagnosticIA, FeedbackIA.diagnostic_id == DiagnosticIA.id)
         .join(Consultation, DiagnosticIA.consultation_id == Consultation.id)
         .where(Consultation.medecin_id == mid)
-        .where(FeedbackIA.created_at >= start)          # filtre période appliqué
+        .where(FeedbackIA.created_at >= start_7w)
         .where(FeedbackIA.concordance.isnot(None))
         .group_by(week_col)
         .order_by(week_col)
     )
-    concordance_data = [
-        {
-            "date": f"S-{max(0, 6 - i)}",
-            "val":  round(float(row.taux) * 100, 1) if row.taux is not None else 0,
-            "nb":   row.nb,
-        }
-        for i, row in enumerate(res.fetchall())
-    ]
+    # Indexer par (année_iso, semaine_iso) pour le remplissage des semaines vides
+    week_values: dict = {}
+    for row in res.fetchall():
+        iso = row.semaine.isocalendar()
+        week_values[(iso[0], iso[1])] = round(float(row.taux) * 100, 1) if row.taux is not None else 0
+
+    # Générer les 7 étiquettes S-6 … S-0 avec 0 si aucun feedback cette semaine-là
+    concordance_data = []
+    for i in range(6, -1, -1):
+        wdt = now - timedelta(weeks=i)
+        iso = wdt.isocalendar()
+        concordance_data.append({
+            "date": f"S-{i}",
+            "val":  week_values.get((iso[0], iso[1]), 0),
+            "nb":   0,
+        })
 
     # ── 5. Base vs Équipe — filtrée par période ───────────────────────────────
     res = await db.execute(
