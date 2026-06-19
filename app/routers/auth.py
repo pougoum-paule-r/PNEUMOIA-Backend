@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.models.medecin          import Medecin
+from app.models.aide_soignant    import AideSoignant
 from app.models.document_medecin import DocumentMedecin
 from app.models.otp              import OTPCode
 from app.models.admin            import Admin
@@ -110,6 +111,12 @@ async def register(
     )
     if existing_email.scalar_one_or_none():
         raise HTTPException(400, "Cet email est déjà utilisé")
+
+    existing_aide_email = await db.execute(
+        select(AideSoignant).where(AideSoignant.email == email)
+    )
+    if existing_aide_email.scalar_one_or_none():
+        raise HTTPException(400, "Cet email est déjà enregistré comme aide soignant — un même email ne peut pas appartenir aux deux rôles")
 
     existing_rpps = await db.execute(
         select(Medecin).where(Medecin.numero_rpps == numero_rpps)
@@ -274,21 +281,21 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     db.add(otp_entry)
     await db.commit()
 
-    async def _send_otp_with_fallback():
-        try:
-            await send_otp_email(medecin.email, medecin.nom, otp)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Email OTP non envoyé (%s) — CODE CONSOLE: %s", e, otp
-            )
-            print(f"\n{'='*50}\n[OTP LOGIN] {medecin.email} → code: {otp}\n{'='*50}\n", flush=True)
-
-    asyncio.create_task(_send_otp_with_fallback())
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    email_sent = True
+    try:
+        await asyncio.wait_for(send_otp_email(medecin.email, medecin.nom, otp), timeout=6.0)
+    except Exception as e:
+        email_sent = False
+        _logger.warning("Email OTP non envoyé (%s) — CODE CONSOLE: %s", e, otp)
+        print(f"\n{'='*50}\n[OTP LOGIN] {medecin.email} → code: {otp}\n{'='*50}\n", flush=True)
 
     return {
-        "message":    "Code OTP envoyé à votre email. Valable 5 minutes.",
-        "medecin_id": str(medecin.id)
+        "message":    "Code OTP envoyé à votre email. Valable 5 minutes." if email_sent
+                      else "Le code OTP a été généré mais l'envoi par email a échoué. Contactez l'administrateur si vous ne recevez pas le code.",
+        "medecin_id": str(medecin.id),
+        "email_sent": email_sent,
     }
 
 
@@ -426,6 +433,7 @@ async def get_profil(
         "statut":        medecin.statut,
         "telephone":     medecin.telephone,
         "adresse":       medecin.adresse,
+        "ville":         medecin.ville,
         "bio":           medecin.bio,
         "linkedin":      medecin.linkedin,
         "website":       medecin.website,
@@ -510,6 +518,7 @@ class ProfilUpdateRequest(BaseModel):
     etablissement: str | None = None
     telephone:     str | None = None
     adresse:       str | None = None
+    ville:         str | None = None
     bio:           str | None = None
     linkedin:      str | None = None
     website:       str | None = None
@@ -527,6 +536,7 @@ async def update_profil(
     if data.etablissement is not None: medecin.etablissement = data.etablissement
     if data.telephone     is not None: medecin.telephone     = data.telephone
     if data.adresse       is not None: medecin.adresse       = data.adresse
+    if data.ville         is not None: medecin.ville         = data.ville
     if data.bio           is not None: medecin.bio           = data.bio
     if data.linkedin      is not None: medecin.linkedin      = data.linkedin
     if data.website       is not None: medecin.website       = data.website
@@ -547,6 +557,7 @@ async def update_profil(
         "statut":        medecin.statut,
         "telephone":     medecin.telephone,
         "adresse":       medecin.adresse,
+        "ville":         medecin.ville,
         "bio":           medecin.bio,
         "linkedin":      medecin.linkedin,
         "website":       medecin.website,
@@ -624,19 +635,22 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     db.add(otp_entry)
     await db.commit()
 
-    async def _send_reset_with_fallback():
-        try:
-            await send_reset_otp_email(medecin.email, medecin.nom, otp)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Email reset OTP non envoyé (%s) — CODE CONSOLE: %s", e, otp
-            )
-            print(f"\n{'='*50}\n[OTP RESET] {medecin.email} → code: {otp}\n{'='*50}\n", flush=True)
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+    email_sent = True
+    try:
+        await asyncio.wait_for(send_reset_otp_email(medecin.email, medecin.nom, otp), timeout=6.0)
+    except Exception as e:
+        email_sent = False
+        _logger.warning("Email reset OTP non envoyé (%s) — CODE CONSOLE: %s", e, otp)
+        print(f"\n{'='*50}\n[OTP RESET] {medecin.email} → code: {otp}\n{'='*50}\n", flush=True)
 
-    asyncio.create_task(_send_reset_with_fallback())
-
-    return {"message": "Code OTP envoyé à votre email. Valable 5 minutes.", "medecin_id": str(medecin.id)}
+    return {
+        "message":    "Code OTP envoyé à votre email. Valable 5 minutes." if email_sent
+                      else "Le code OTP a été généré mais l'envoi par email a échoué.",
+        "medecin_id": str(medecin.id),
+        "email_sent": email_sent,
+    }
 
 
 # ─────────────────────────────────────────────────────────────

@@ -157,7 +157,8 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
             ("ROUNDEDCORNERS", [4]),
         ]))
         sub_t = Table([[Paragraph(
-            f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}  ·  Consultation #{consultation.id}",
+            f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}  ·  Consultation #{consultation.id}"
+            f"  ·  Patient ID : {patient.id}",
             S_HDR_SUB)]], colWidths=[W])
         sub_t.setStyle(TableStyle([
             ("BACKGROUND",   (0,0), (-1,-1), colors.HexColor("#1e40af")),
@@ -176,17 +177,18 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
 
         religion_label = RELIGIONS.get(patient.religion or "", patient.religion or "—")
         pat_rows = [
+            row("ID Patient",       patient.id),
             row("Nom complet",      f"{patient.civilite or ''} {patient.prenom} {patient.nom}".strip()),
             row("Date de naissance", str(patient.date_naissance) if patient.date_naissance else "—"),
-            row("Âge",              _age(patient.date_naissance)),
-            row("Téléphone",        patient.telephone or "—"),
+            row("Age",              _age(patient.date_naissance)),
+            row("Telephone",        patient.telephone or "—"),
             row("Groupe sanguin",   patient.groupe_sanguin or "—"),
             row("Religion",         religion_label),
         ]
         if patient.religion == "temoin_jehovah":
             pat_rows.append([
-                Paragraph("⚠ Alerte médicale", S_ALERT_LBL),
-                Paragraph("TÉMOIN DE JÉHOVAH — Refus formel de transfusion sanguine", S_ALERT_VAL),
+                Paragraph("[!] Alerte medicale", S_ALERT_LBL),
+                Paragraph("TEMOIN DE JEHOVAH - Refus formel de transfusion sanguine", S_ALERT_VAL),
             ])
 
         pat_t = Table(pat_rows, colWidths=[W*0.36, W*0.64])
@@ -252,7 +254,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         if criteres:
             story.append(Paragraph("Critères cliniques validés", S_SEC))
             story.append(Spacer(1, 4))
-            crit_rows = [[Paragraph(f"✓  {c}", S_BULLET)] for c in criteres]
+            crit_rows = [[Paragraph(f"[+]  {c}", S_BULLET)] for c in criteres]
             crit_t = Table(crit_rows, colWidths=[W])
             crit_t.setStyle(TableStyle([
                 ("GRID",         (0,0), (-1,-1), 0.5, C_GRAY_BDR),
@@ -269,7 +271,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         if examens:
             story.append(Paragraph("Examens recommandés", S_SEC))
             story.append(Spacer(1, 4))
-            exam_rows = [[Paragraph(f"→  {e}", S_BULLET)] for e in examens]
+            exam_rows = [[Paragraph(f"->  {e}", S_BULLET)] for e in examens]
             exam_t = Table(exam_rows, colWidths=[W])
             exam_t.setStyle(TableStyle([
                 ("GRID",         (0,0), (-1,-1), 0.5, C_GRAY_BDR),
@@ -286,7 +288,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         if recommandations:
             story.append(Paragraph("Recommandations médicales", S_SEC))
             story.append(Spacer(1, 4))
-            reco_rows = [[Paragraph(f"✓  {r}", S_BULLET)] for r in recommandations]
+            reco_rows = [[Paragraph(f"[+]  {r}", S_BULLET)] for r in recommandations]
             reco_t = Table(reco_rows, colWidths=[W])
             reco_t.setStyle(TableStyle([
                 ("GRID",          (0,0), (-1,-1), 0.5, colors.HexColor("#bfdbfe")),

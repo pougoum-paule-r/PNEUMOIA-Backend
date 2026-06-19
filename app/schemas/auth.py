@@ -15,4 +15,5 @@ class TokenResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message:    str
-    medecin_id: str | None = None  # présent seulement après /login
+    medecin_id: str | None = None   # présent seulement après /login
+    email_sent: bool | None = None  # False si l'envoi d'email OTP a échoué

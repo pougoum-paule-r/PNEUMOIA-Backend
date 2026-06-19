@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
+from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime, timezone
 from pydantic import BaseModel
 
@@ -628,6 +629,30 @@ async def modifier_patient(
     return patient
 
 
+# ── PATCH /patients/:id/suivi — Enregistrer le prochain suivi ────
+class SuiviIn(BaseModel):
+    prochain_suivi: str  # ISO date "YYYY-MM-DD"
+
+@router.patch("/{patient_id}/suivi", status_code=200)
+async def mettre_a_jour_suivi(
+    patient_id: str,
+    payload: SuiviIn,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    patient = await db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient introuvable")
+
+    antecedents = dict(patient.antecedents or {})
+    antecedents["prochain_suivi"] = payload.prochain_suivi
+    patient.antecedents = antecedents
+    flag_modified(patient, "antecedents")
+
+    await db.commit()
+    return {"prochain_suivi": payload.prochain_suivi}
+
+
 # ── GET /patients/:id/acces — Médecins ayant accès ───────────────
 @router.get("/{patient_id}/acces")
 async def acces_patient(
@@ -801,6 +826,23 @@ async def soumettre_avis(
     await db.refresh(avis)
 
     med = await db.get(Medecin, medecin.id)
+
+    # Notifier le médecin propriétaire si ce n'est pas lui-même qui commente
+    if patient.created_by and patient.created_by != medecin.id:
+        from app.services.notification_service import push_notif
+        await push_notif(
+            db,
+            dest_id    = patient.created_by,
+            type_dest  = "medecin",
+            type_notif = "avis_collaboratif",
+            titre      = "Nouvel avis collaboratif",
+            message    = (
+                f"Dr. {med.prenom} {med.nom} a laissé un avis sur le dossier de "
+                f"{patient.prenom} {patient.nom} : « {payload.contenu.strip()[:80]}{'…' if len(payload.contenu) > 80 else ''} »"
+            ),
+            meta = {"lien": f"/medecin/dossier/{patient_id}", "patient_id": patient_id},
+        )
+
     return {
         "id":                 avis.id,
         "medecin_nom":        f"{med.prenom} {med.nom}" if med else "—",

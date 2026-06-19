@@ -131,7 +131,7 @@ def test_dataset_compatibility(pipe, features, model_name):
     - valeurs extremes hors plage d'entrainement
     """
     print(f"\n  Test compatibilite dataset externe ({model_name})")
-    rng    = np.random.default_rng(2024)
+    rng    = np.random.default_rng(2026)
     passed = 0
     total  = 3
 

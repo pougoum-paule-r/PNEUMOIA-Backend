@@ -9,7 +9,7 @@ Usage :
     await push_notif(db, dest_id="PNEU-123", type_dest="medecin",
                      type_notif="aide_nouveau_patient",
                      titre="Nouveau patient créé",
-                     message="L'aide soignant Jean Dupont a créé le dossier de Marie Curie.",
+                     message="L'aide soignant Tagne eKale a créé le dossier de Marie Curie.",
                      meta={"patient_id": "PAT-999", "lien": "/medecin/patients"})
 """
 from sqlalchemy.ext.asyncio import AsyncSession

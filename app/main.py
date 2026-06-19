@@ -9,7 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import settings
 from app.database import engine, Base
+
 from app.init_db import seed_admin
+
+try:
+    import asyncpg as _asyncpg
+    _ASYNCPG_AVAILABLE = True
+except ImportError:
+    _ASYNCPG_AVAILABLE = False
 
 from app.routers import auth, admin, diagnostics, patients, consultations, ressources
 from app.routers.medecins         import router_medecins
@@ -74,6 +81,30 @@ async def global_error_handler(request: Request, exc: Exception):
         pass
 
     return JSONResponse(status_code=500, content={"detail": "Erreur interne du serveur"})
+if _ASYNCPG_AVAILABLE:
+    @app.exception_handler(_asyncpg.exceptions.ConnectionDoesNotExistError)
+    async def _asyncpg_conn_lost(request: Request, exc: Exception):
+        await engine.dispose()
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Base de données momentanément indisponible — réessayez"},
+        )
+
+    @app.exception_handler(_asyncpg.exceptions.TooManyConnectionsError)
+    async def _asyncpg_too_many(request: Request, exc: Exception):
+        await engine.dispose()
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Trop de connexions actives — réessayez dans quelques secondes"},
+        )
+
+    @app.exception_handler(_asyncpg.exceptions.PostgresConnectionError)
+    async def _asyncpg_pg_conn(request: Request, exc: Exception):
+        await engine.dispose()
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Connexion PostgreSQL perdue — réessayez"},
+        )
 
 
 app.add_middleware(
