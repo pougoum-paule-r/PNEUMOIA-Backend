@@ -1,4 +1,4 @@
-"""
+﻿"""
 question_medecin.py — Questions posées par les médecins à l'administration
 
 Multiplicité :
@@ -13,7 +13,7 @@ Cycle de vie :
 
 import random
 import string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Text, DateTime, Enum, ForeignKey
 from sqlalchemy.orm import relationship
@@ -60,8 +60,8 @@ class QuestionMedecin(Base):
     repondu_le = Column(DateTime, nullable=True)      # date de la réponse
 
     # ── Méta ──────────────────────────────────────────────────────────────────
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=True,  onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(DateTime, nullable=True,  onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # ── Relations ─────────────────────────────────────────────────────────────
     medecin   = relationship(

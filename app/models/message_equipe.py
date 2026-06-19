@@ -1,5 +1,5 @@
-import random, string
-from datetime import datetime
+﻿import random, string
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column, String, Text, Integer, Boolean,
@@ -36,7 +36,7 @@ class MessageEquipe(Base):
     type_msg    = Column(Enum("rapport", "alerte", "info", name="type_message_equipe"), nullable=False, default="rapport")
     pinned      = Column(Boolean, nullable=False, default=False)
     likes_count = Column(Integer, nullable=False, default=0)
-    created_at  = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at  = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relations
     medecin_referent = relationship("Medecin", foreign_keys=[medecin_referent_id], backref="equipe_messages_recus")

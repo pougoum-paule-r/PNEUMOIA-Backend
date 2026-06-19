@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer
 from sqlalchemy.orm import relationship
@@ -21,7 +21,7 @@ class OTPCode(Base):
     used       = Column(Boolean,    nullable=False, default=False)
     purpose    = Column(String(20), nullable=False, default='login')   # 'login' | 'reset'
     fail_count = Column(Integer,    nullable=False, default=0)         # tentatives incorrectes
-    created_at = Column(DateTime,   nullable=False, default=lambda: datetime.utcnow())
+    created_at = Column(DateTime,   nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     
     # Relations
     medecin = relationship("Medecin", back_populates="otp_codes")

@@ -1,4 +1,4 @@
-"""
+﻿"""
 admin_service.py — Service d'administration PneumoIA
 
 Organisation :
@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, cast, Date
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import random
 import secrets
@@ -173,7 +173,7 @@ class AdminService:
         annee: Optional[int] = None,
     ) -> list[dict]:
         """Retourne les médecins validés pour un mois/année donnés."""
-        now   = datetime.utcnow()
+        now   = datetime.now(timezone.utc).replace(tzinfo=None)
         m     = mois  or now.month
         y     = annee or now.year
         debut = datetime(y, m, 1)
@@ -481,9 +481,9 @@ class AdminService:
         token = secrets.token_urlsafe(32)
         medecin.statut             = "valide"
         medecin.activation_token   = token
-        medecin.activation_expires = datetime.utcnow() + timedelta(days=7)
+        medecin.activation_expires = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=7)
         medecin.valide_par         = admin_id
-        medecin.valide_le          = datetime.utcnow()
+        medecin.valide_le          = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
 
         lien = f"{settings.FRONTEND_URL}/medecin/activer?token={token}"
@@ -571,7 +571,7 @@ class AdminService:
         il y a plus de 48h sans que le médecin n'ait resoumis de nouvelle demande
         (ce qui se traduirait par un changement de statut, donc disparition du filtre 'rejete').
         """
-        seuil = datetime.utcnow() - timedelta(hours=48)
+        seuil = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=48)
         result = await db.execute(
             select(Medecin).where(
                 Medecin.statut == "rejete",
@@ -669,7 +669,7 @@ class AdminService:
             raise HTTPException(502, "Échec envoi e-mail SMTP.")
 
         medecin.relance_sent = True
-        medecin.relance_at   = datetime.utcnow()
+        medecin.relance_at   = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
 
         await log_admin_action(db, admin_id, "relance_envoyee", medecin_id=medecin.id,
@@ -699,7 +699,7 @@ class AdminService:
         medecin.suspension_raison = raison
         medecin.suspension_duree  = duree
         medecin.suspension_par    = admin_id
-        medecin.suspension_le     = datetime.utcnow()
+        medecin.suspension_le     = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
 
         await _send_email_smtp(
@@ -798,7 +798,7 @@ class AdminService:
         # Sauvegarde du statut pour restauration future
         medecin.statut_precedent = medecin.statut
         medecin.statut           = "corbeille"
-        medecin.supprime_le      = datetime.utcnow()
+        medecin.supprime_le      = datetime.now(timezone.utc).replace(tzinfo=None)
         medecin.supprime_par     = admin_id
         await db.commit()
 
@@ -848,7 +848,7 @@ class AdminService:
 
         otp = "".join(random.choices("0123456789", k=6))
         admin.reset_otp  = otp
-        admin.otp_expiry = datetime.utcnow() + timedelta(minutes=10)
+        admin.otp_expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10)
         await db.commit()
         return otp
 
@@ -873,7 +873,7 @@ class AdminService:
 
         if not admin or admin.reset_otp != otp:
             raise HTTPException(status_code=400, detail="Code OTP invalide.")
-        if admin.otp_expiry and datetime.utcnow() > admin.otp_expiry:
+        if admin.otp_expiry and datetime.now(timezone.utc).replace(tzinfo=None) > admin.otp_expiry:
             raise HTTPException(status_code=400, detail="Code OTP expiré. Recommencez la procédure.")
 
         admin.password_hash = hash_password(new_password)
@@ -965,7 +965,7 @@ class AdminService:
 
         q.reponse    = reponse
         q.statut     = "repondu"
-        q.repondu_at = datetime.utcnow()
+        q.repondu_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         # Notification visible dans l'espace médecin sur la plateforme
         if q.medecin_id:
@@ -1106,7 +1106,7 @@ class AdminService:
         faq.reponse   = reponse
         faq.categorie = categorie
         faq.publie    = publie
-        faq.updated_at = datetime.utcnow()
+        faq.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
         return {"message": "FAQ mise à jour."}
 
@@ -1218,7 +1218,7 @@ class AdminService:
         result = []
 
         for i in range(29, -1, -1):
-            d     = (datetime.utcnow() - timedelta(days=i)).date()
+            d     = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=i)).date()
             count = await db.scalar(
                 select(func.count()).select_from(Consultation)
                 .where(cast(Consultation.created_at, Date) == d)
@@ -1348,7 +1348,7 @@ class AdminService:
         """
         from app.models.consultation import Consultation
 
-        now   = datetime.utcnow()
+        now   = datetime.now(timezone.utc).replace(tzinfo=None)
         m     = mois  or now.month
         y     = annee or now.year
         debut = datetime(y, m, 1)
@@ -1469,7 +1469,7 @@ class AdminService:
         from app.models.diagnostic_ia import DiagnosticIA
 
         MOIS_COURTS = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Aoû","Sep","Oct","Nov","Déc"]
-        now    = datetime.utcnow()
+        now    = datetime.now(timezone.utc).replace(tzinfo=None)
         result = []
 
         for i in range(5, -1, -1):  # du plus ancien au plus récent
@@ -1554,7 +1554,7 @@ class AdminService:
         """
         from app.models.consultation import Consultation
 
-        now   = datetime.utcnow()
+        now   = datetime.now(timezone.utc).replace(tzinfo=None)
         m     = mois  or now.month
         y     = annee or now.year
         debut = datetime(y, m, 1)
@@ -1650,9 +1650,9 @@ class AdminService:
 
             if param:
                 param.valeur     = body
-                param.updated_at = datetime.utcnow()
+                param.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             else:
-                param = Parametre(id=str(uuid.uuid4()), cle="global", valeur=body, updated_at=datetime.utcnow())
+                param = Parametre(id=str(uuid.uuid4()), cle="global", valeur=body, updated_at=datetime.now(timezone.utc).replace(tzinfo=None))
                 db.add(param)
 
             await db.commit()
@@ -1703,7 +1703,7 @@ class AdminService:
         """Supprime les entrées du journal antérieures à N jours (0 = tout purger)."""
         from app.models.audit_log import AuditLog
 
-        cutoff = datetime.utcnow() - timedelta(days=days) if days > 0 else datetime.max
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days) if days > 0 else datetime.max
         if days == 0:
             # Purge complète
             result = await db.execute(select(AuditLog))
@@ -1740,7 +1740,7 @@ class AdminService:
         )
         medecins = result.scalars().all()
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         return [
             {
                 **format_medecin(m),

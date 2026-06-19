@@ -1,7 +1,7 @@
-# app/routers/aides.py
+﻿# app/routers/aides.py
 import asyncio
 import random, string, logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -14,7 +14,7 @@ from typing import Optional
 from jose import JWTError
 
 from app.database import get_db
-from app.models.aide_soignant import AideSoignant, generate_aide_id, generate_code_referent
+from app.models.aide_soignant import AideSoignant, generate_code_referent
 from app.models.medecin import Medecin
 from app.core.security import hash_password, verify_password, create_access_token, decode_token
 from app.config import settings
@@ -241,7 +241,7 @@ async def login_aide(body: LoginAideRequest, background_tasks: BackgroundTasks, 
 
     # Générer et stocker l'OTP
     code   = ''.join(random.choices(string.digits, k=6))
-    expiry = datetime.utcnow() + timedelta(minutes=5)
+    expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=5)
     _aide_otp[aide.id] = (code, expiry)
     print(f"[OTP] Généré pour {aide.email} | notif_email={( aide.preferences or {}).get('notif_email', True)}", flush=True)
 
@@ -274,7 +274,7 @@ async def verify_otp_aide(body: VerifyOtpAideRequest, db: AsyncSession = Depends
         raise HTTPException(400, "Aucun code OTP en attente. Reconnectez-vous.")
 
     code, expiry = entry
-    if datetime.utcnow() > expiry:
+    if datetime.now(timezone.utc).replace(tzinfo=None) > expiry:
         _aide_otp.pop(body.aide_id, None)
         raise HTTPException(400, "Code OTP expiré. Reconnectez-vous.")
 

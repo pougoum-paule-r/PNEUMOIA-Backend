@@ -1,5 +1,5 @@
-import asyncio, os, shutil, uuid, random, string
-from datetime import datetime, timedelta
+﻿import asyncio, os, shutil, uuid, random, string
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
@@ -269,7 +269,7 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     # Générer OTP
     otp    = generate_otp()
-    expiry = datetime.utcnow() + timedelta(minutes=5)
+    expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=5)
 
     otp_entry = OTPCode(
         id=generate_doc_id(),
@@ -316,7 +316,7 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
 
     if not otp_entry:
         raise HTTPException(401, "Code OTP incorrect")
-    if datetime.utcnow() > otp_entry.expires_at:
+    if datetime.now(timezone.utc).replace(tzinfo=None) > otp_entry.expires_at:
         raise HTTPException(401, "Code OTP expiré. Reconnectez-vous pour en recevoir un nouveau.")
 
     otp_entry.used = True
@@ -325,7 +325,7 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
     med_result = await db.execute(select(Medecin).where(Medecin.id == body.medecin_id))
     medecin    = med_result.scalar_one_or_none()
     if medecin:
-        medecin.derniere_connexion = datetime.utcnow()
+        medecin.derniere_connexion = datetime.now(timezone.utc).replace(tzinfo=None)
 
     await db.commit()
 
@@ -559,7 +559,7 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     )
 
     otp    = generate_otp()
-    expiry = datetime.utcnow() + timedelta(minutes=5)
+    expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=5)
     otp_entry = OTPCode(
         id=generate_doc_id(),
         medecin_id=medecin.id,
@@ -613,7 +613,7 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
     if not otp_entry:
         raise HTTPException(404, "Aucun code de réinitialisation en cours. Recommencez.")
 
-    if datetime.utcnow() > otp_entry.expires_at:
+    if datetime.now(timezone.utc).replace(tzinfo=None) > otp_entry.expires_at:
         otp_entry.used = True
         await db.commit()
         raise HTTPException(401, "Code OTP expiré. Demandez un nouveau code.")
@@ -712,7 +712,113 @@ async def activate_account(token: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(400, "Lien invalide ou déjà utilisé")
     if medecin.statut != "valide":
         raise HTTPException(403, "Compte non validé par l'administrateur")
-    if datetime.utcnow() > medecin.activation_expires:
+    if datetime.now(timezone.utc).replace(tzinfo=None) > medecin.activation_expires:
         raise HTTPException(400, "Ce lien a expiré (7 jours). Contactez l'administrateur.")
 
+<<<<<<< Updated upstream
     return {"message": "Compte activé. Vous pouvez maintenant vous connecter."}
+=======
+    return {"message": "Compte activé. Vous pouvez maintenant vous connecter."}
+
+
+# ─────────────────────────────────────────────────────────────
+#  POST /api/v1/auth/forgot-password  (étape 1 reset)
+# ─────────────────────────────────────────────────────────────
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+@router.post("/forgot-password", response_model=MessageResponse)
+async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result  = await db.execute(select(Medecin).where(Medecin.email == body.email))
+    medecin = result.scalar_one_or_none()
+
+    # Ne pas révéler si l'email existe ou non
+    if not medecin or medecin.statut not in ("valide",):
+        return {"message": "Si cet email est enregistré, un code vous a été envoyé.", "medecin_id": ""}
+
+    otp    = generate_otp()
+    expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10)
+
+    otp_entry = OTPCode(
+        id=generate_doc_id(),
+        medecin_id=medecin.id,
+        code=otp,
+        expires_at=expiry,
+        used=False,
+    )
+    db.add(otp_entry)
+    await db.commit()
+
+    try:
+        from fastapi.concurrency import run_in_threadpool
+        await run_in_threadpool(send_otp_email, medecin.email, medecin.nom, otp)
+    except Exception as e:
+        print(f"⚠️ Email OTP reset non envoyé : {e}")
+        raise HTTPException(500, "Erreur lors de l'envoi du code. Réessayez.")
+
+    return {"message": "Code OTP envoyé à votre email. Valable 10 minutes.", "medecin_id": str(medecin.id)}
+
+
+# ─────────────────────────────────────────────────────────────
+#  POST /api/v1/auth/reset-verify-otp  (étape 2 reset)
+# ─────────────────────────────────────────────────────────────
+class ResetVerifyOtpRequest(BaseModel):
+    medecin_id: str
+    code:       str
+
+@router.post("/reset-verify-otp")
+async def reset_verify_otp(body: ResetVerifyOtpRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(OTPCode)
+        .where(OTPCode.medecin_id == body.medecin_id)
+        .where(OTPCode.code       == body.code)
+        .where(OTPCode.used       == False)
+        .order_by(OTPCode.created_at.desc())
+        .limit(1)
+    )
+    otp_entry = result.scalar_one_or_none()
+
+    if not otp_entry:
+        raise HTTPException(401, "Code OTP incorrect")
+    if datetime.now(timezone.utc).replace(tzinfo=None) > otp_entry.expires_at:
+        raise HTTPException(401, "Code OTP expiré. Faites une nouvelle demande.")
+
+    otp_entry.used = True
+    await db.commit()
+
+    # Token temporaire reset (15 min, type distinct du token de session)
+    reset_token = create_access_token(
+        {"sub": body.medecin_id, "type": "password_reset"},
+        expires_minutes=15,
+    )
+    return {"reset_token": reset_token}
+
+
+# ─────────────────────────────────────────────────────────────
+#  POST /api/v1/auth/reset-password  (étape 3 reset)
+# ─────────────────────────────────────────────────────────────
+class ResetPasswordRequest(BaseModel):
+    reset_token:  str
+    new_password: str
+
+@router.post("/reset-password", response_model=MessageResponse)
+async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    from jose import JWTError
+    try:
+        payload = decode_token(body.reset_token)
+    except JWTError:
+        raise HTTPException(401, "Token invalide ou expiré")
+
+    if payload.get("type") != "password_reset":
+        raise HTTPException(401, "Token non autorisé pour cette opération")
+
+    medecin_id = payload.get("sub")
+    medecin    = await db.get(Medecin, medecin_id)
+    if not medecin:
+        raise HTTPException(404, "Médecin introuvable")
+
+    medecin.password_hash = hash_password(body.new_password)
+    await db.commit()
+
+    return {"message": "Mot de passe réinitialisé avec succès. Vous pouvez vous connecter."}
+>>>>>>> Stashed changes

@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Date, DateTime, Enum, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -55,8 +55,8 @@ class Patient(Base):
     created_by      = Column(String(15), ForeignKey("medecins.id",       ondelete="SET NULL"), nullable=True)
     aide_id         = Column(String(15), ForeignKey("aides_soignants.id",ondelete="SET NULL"), nullable=True)
     created_by_aide = Column(String(15), ForeignKey("aides_soignants.id",ondelete="SET NULL"), nullable=True)
-    created_at      = Column(DateTime,   nullable=False, default=datetime.utcnow)
-    updated_at      = Column(DateTime,   nullable=True,  onupdate=datetime.utcnow)
+    created_at      = Column(DateTime,   nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at      = Column(DateTime,   nullable=True,  onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # ── Soft-delete ───────────────────────────────────────────────
     deleted_at = Column(DateTime,   nullable=True, default=None)

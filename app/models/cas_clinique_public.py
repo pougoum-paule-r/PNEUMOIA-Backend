@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Boolean, Integer, Text, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
@@ -25,7 +25,7 @@ class CasCliniquPublic(Base):
     anonymise          = Column(Boolean,  nullable=False, default=True)
     nb_vues            = Column(Integer,  nullable=False, default=0)
     nb_telechargements = Column(Integer,  nullable=False, default=0)
-    created_at         = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at         = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relations
     auteur = relationship("Medecin", back_populates="cas_cliniques")

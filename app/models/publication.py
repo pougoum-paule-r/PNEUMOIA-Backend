@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Text, Integer, DateTime, Enum, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
@@ -28,7 +28,7 @@ class Publication(Base):
     tags            = Column(JSONB,    nullable=False, default=list)   # ["Tuberculose", "BPCO", ...]
     nb_commentaires = Column(Integer,  nullable=False, default=0)
     nb_reactions    = Column(Integer,  nullable=False, default=0)
-    created_at      = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at      = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relations
     communaute   = relationship("Communaute",   back_populates="publications")

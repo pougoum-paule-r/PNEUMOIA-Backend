@@ -1,6 +1,6 @@
-# app/routers/ressources.py
+﻿# app/routers/ressources.py
 import os, shutil, random, string
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List
 
@@ -396,7 +396,7 @@ async def modifier_ressource(
             f.write(contenu_pdf)
         ressource.pdf_url = str(chemin_pdf)
 
-    ressource.updated_at = datetime.utcnow()
+    ressource.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     return {"message": "Ressource modifiée avec succès"}
 
@@ -422,7 +422,7 @@ async def publier_ressource(
         raise HTTPException(404, "Ressource introuvable")
 
     ressource.publie     = not ressource.publie
-    ressource.updated_at = datetime.utcnow()
+    ressource.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
 
     action = "publiée" if ressource.publie else "dépubliée"

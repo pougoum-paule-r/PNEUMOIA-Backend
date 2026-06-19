@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Boolean, DateTime, Enum, Text, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
@@ -50,8 +50,8 @@ class Medecin(Base):
     code_referent       = Column(String(10),  unique=True, nullable=True, default=generate_code_referent)
     code_referent_actif = Column(Boolean,     nullable=False, default=True)
     preferences         = Column(JSONB,       nullable=True,  server_default='{}')
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
-    updated_at = Column(DateTime, nullable=True,  onupdate=lambda: datetime.utcnow())
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(DateTime, nullable=True,  onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # ── Suspension ────────────────────────────────────────────────────
     suspension_raison = Column(Text,        nullable=True)

@@ -1,5 +1,5 @@
-import random, string
-from datetime import datetime
+﻿import random, string
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
@@ -18,7 +18,7 @@ class AvisPatient(Base):
     patient_id = Column(String(15), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
     medecin_id = Column(String(15), ForeignKey("medecins.id", ondelete="CASCADE"), nullable=False)
     contenu    = Column(Text,       nullable=False)
-    created_at = Column(DateTime,   nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime,   nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     patient = relationship("Patient")
     medecin = relationship("Medecin")

@@ -1,6 +1,6 @@
-# app/routers/monitoring.py
+﻿# app/routers/monitoring.py
 from collections import OrderedDict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +34,7 @@ async def get_stats(
     db: AsyncSession = Depends(get_db),
     medecin=Depends(get_current_medecin),
 ):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     if periode == "today":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif periode == "month":
@@ -174,7 +174,7 @@ async def get_ia_metrics(
     medecin=Depends(get_current_medecin),
 ):
     mid   = medecin.id
-    now   = datetime.utcnow()
+    now   = datetime.now(timezone.utc).replace(tzinfo=None)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Total diagnostics générés

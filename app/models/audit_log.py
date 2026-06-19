@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB, INET
@@ -22,7 +22,7 @@ class AuditLog(Base):
     details    = Column(JSONB,       nullable=False, default=dict)
     ip_address = Column(INET,        nullable=True)
     user_agent = Column(String(500), nullable=True)
-    created_at = Column(DateTime,    nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relations
     medecin = relationship("Medecin", back_populates="audit_logs")

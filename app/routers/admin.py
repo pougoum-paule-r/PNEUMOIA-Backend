@@ -920,11 +920,11 @@ async def get_patients_supprimes(
     db:    AsyncSession = Depends(get_db),
     admin: Admin        = Depends(get_current_admin),
 ):
-    from datetime import timedelta
+    from datetime import datetime, timedelta, timezone
     from app.models.patient import Patient
     from app.models.medecin import Medecin
 
-    now = __import__('datetime').datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff_hard  = now - timedelta(days=40)
     cutoff_admin = now - timedelta(days=30)
 

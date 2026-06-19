@@ -1,6 +1,6 @@
-import random
+﻿import random
 import string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
@@ -30,7 +30,7 @@ class Avis(Base):
     commentaire   = Column(Text,        nullable=False)
     statut        = Column(String(20),  nullable=False, default="publie")
     vu            = Column(Boolean,     nullable=False, default=False)
-    created_at    = Column(DateTime,    nullable=False, default=datetime.utcnow)
+    created_at    = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     medecin = relationship("Medecin", lazy="select")
 

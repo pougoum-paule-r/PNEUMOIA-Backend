@@ -1,6 +1,6 @@
 ﻿import random
 import string
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, DateTime
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -29,8 +29,8 @@ class Admin(Base):
     otp_expiry    = Column(DateTime,    nullable=True)   # expiration dans 10 min
 
     # ── Audit ──────────────────────────────────────────────────────────────────
-    created_at    = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at    = Column(DateTime, nullable=True,  onupdate=datetime.utcnow)
+    created_at    = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at    = Column(DateTime, nullable=True,  onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # ── Relations ──────────────────────────────────────────────────────────────
     # cascade="all, delete-orphan" signifie que si l'admin est supprimé,
@@ -52,7 +52,7 @@ class Admin(Base):
         """Vérifie si l'OTP est correct et non expiré."""
         if not self.reset_otp or not self.otp_expiry:
             return False
-        if datetime.utcnow() > self.otp_expiry:
+        if datetime.now(timezone.utc).replace(tzinfo=None) > self.otp_expiry:
             return False
         return self.reset_otp == provided_otp
 

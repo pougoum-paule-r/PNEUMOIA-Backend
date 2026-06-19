@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Text, DateTime, Enum, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
@@ -81,8 +81,8 @@ class Consultation(Base):
     # }
 
     # ── MÉTA ──────────────────────────────────────────────────────────
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=True,  onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(DateTime, nullable=True,  onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # ── RELATIONS ─────────────────────────────────────────────────────
     patient      = relationship("Patient",      back_populates="consultations")

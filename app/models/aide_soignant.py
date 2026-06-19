@@ -1,5 +1,5 @@
-import random, string
-from datetime import datetime
+﻿import random, string
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -35,7 +35,7 @@ class AideSoignant(Base):
 
     preferences = Column(JSONB, nullable=True, server_default='{}')
 
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relations
     medecin = relationship("Medecin", back_populates="aides_soignants")

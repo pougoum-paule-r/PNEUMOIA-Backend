@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Integer, DateTime, Enum, ForeignKey
 from sqlalchemy.orm import relationship
@@ -34,7 +34,7 @@ class DocumentMedecin(Base):
     mime_type     = Column(String(100), nullable=True)
     statut        = Column(String(20),  nullable=False, default="en_attente")
     motif_rejet   = Column(String(500), nullable=True)
-    created_at    = Column(DateTime,    nullable=False, default=lambda: datetime.utcnow())
+    created_at    = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     
     # Relations
     medecin = relationship("Medecin", back_populates="documents")

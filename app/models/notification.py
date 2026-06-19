@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Boolean, Text, DateTime, Enum
 from sqlalchemy.dialects.postgresql import JSONB
@@ -27,7 +27,7 @@ class Notification(Base):
     meta            = Column(JSONB,       nullable=False, default=dict)
     # Exemple : {lien: "/patients/PAT-...", patient_id: "..."}
     lu              = Column(Boolean,     nullable=False, default=False)
-    created_at      = Column(DateTime,    nullable=False, default=datetime.utcnow)
+    created_at      = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Pas de FK directe : destinataire peut être medecin ou admin
     def __repr__(self):

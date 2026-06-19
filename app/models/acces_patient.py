@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Text, DateTime, Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
@@ -25,8 +25,8 @@ class AccesPatient(Base):
     )
     justificatif_demande = Column(Text,     nullable=True)
     motif_refus          = Column(Text,     nullable=True)
-    created_at           = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at           = Column(DateTime, nullable=True,  onupdate=datetime.utcnow)
+    created_at           = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at           = Column(DateTime, nullable=True,  onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     __table_args__ = (
         UniqueConstraint("patient_id", "medecin_demandeur_id", name="uq_acces_medecin_patient"),

@@ -1,4 +1,4 @@
-"""
+﻿"""
 faq_publiee.py — FAQ publiées par l'administrateur
 
 Multiplicité :
@@ -13,7 +13,7 @@ Cycle de vie :
 
 import random
 import string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, ForeignKey
 from sqlalchemy.orm import relationship
@@ -54,8 +54,8 @@ class FAQPubliee(Base):
     # Incrémenté chaque fois qu'un médecin consulte cette entrée FAQ
 
     # ── Méta ──────────────────────────────────────────────────────────────────
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=True,  onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(DateTime, nullable=True,  onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # ── Relations ─────────────────────────────────────────────────────────────
     admin = relationship(

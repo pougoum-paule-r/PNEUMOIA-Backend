@@ -1,5 +1,5 @@
-import random, string
-from datetime import datetime
+﻿import random, string
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Text, DateTime, Enum, ForeignKey
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -27,7 +27,7 @@ class QuestionAdmin(Base):
     )
     reponse    = Column(Text, nullable=True)
 
-    created_at  = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at  = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     repondu_at  = Column(DateTime, nullable=True)
 
     medecin = relationship("Medecin", foreign_keys=[medecin_id], lazy="noload")

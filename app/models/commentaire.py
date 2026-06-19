@@ -1,5 +1,5 @@
-import random, string
-from datetime import datetime
+﻿import random, string
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Text, Integer, DateTime, Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
@@ -28,7 +28,7 @@ class Commentaire(Base):
 
     contenu     = Column(Text,    nullable=False)
     likes_count = Column(Integer, nullable=False, default=0)
-    created_at  = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at  = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relations
     publication  = relationship("Publication",  back_populates="commentaires")

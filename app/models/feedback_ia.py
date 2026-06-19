@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, Boolean, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
@@ -20,7 +20,7 @@ class FeedbackIA(Base):
     concordance      = Column(Boolean,     nullable=True)        # l'IA avait-elle raison ?
     diagnostic_final = Column(String(200), nullable=True)        # diagnostic retenu par le médecin
     commentaire      = Column(Text,        nullable=True)
-    created_at       = Column(DateTime,    nullable=False, default=datetime.utcnow)
+    created_at       = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relations
     diagnostic = relationship("DiagnosticIA", back_populates="feedbacks")

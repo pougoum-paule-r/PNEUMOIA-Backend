@@ -1,5 +1,5 @@
-import secrets, random, string, bcrypt
-from datetime import datetime, timedelta
+﻿import secrets, random, string, bcrypt
+from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -22,7 +22,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 # ── JWT ───────────────────────────────────────────────────────────
 def create_access_token(data: dict, expires_minutes: int = None) -> str:
     payload = data.copy()
-    expire  = datetime.utcnow() + timedelta(
+    expire  = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
         minutes=expires_minutes or settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
     payload["exp"] = expire
