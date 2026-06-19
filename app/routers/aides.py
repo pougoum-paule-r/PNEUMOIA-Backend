@@ -667,6 +667,7 @@ async def get_patients_aide(
             "telephone":      p.telephone,
             "email":          p.email,
             "adresse":        p.adresse,
+            "created_at":     p.created_at.isoformat() + "Z" if p.created_at else None,
         }
         for p in patients
     ]

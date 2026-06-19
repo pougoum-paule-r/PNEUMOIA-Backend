@@ -280,10 +280,10 @@ async def add_commentaire(
     pub.nb_commentaires += 1
     await db.flush()
 
-    # Notifier l'auteur de la publication s'il n'est pas le commentateur
     from app.services.notification_service import push_notif
     if pub.auteur_id and pub.auteur_id != actor["id"]:
         if actor["type"] == "aide_soignant":
+            # Aide commente → notifier le médecin auteur
             await push_notif(
                 db,
                 dest_id   = pub.auteur_id,
@@ -294,15 +294,25 @@ async def add_commentaire(
                 meta      = {"lien": "/medecin/commentaires"},
             )
         elif actor["type"] == "medecin":
-            await push_notif(
-                db,
-                dest_id   = pub.auteur_id,
-                type_dest = "medecin",
-                type_notif= "nouveau_commentaire",
-                titre     = "Nouveau commentaire sur votre publication",
-                message   = f"{actor['nom']} a commenté votre publication « {pub.titre} ».",
-                meta      = {"lien": "/medecin/commentaires"},
+            # Médecin commente → notifier les aides soignants liés à ce médecin
+            from app.models.aide_soignant import AideSoignant
+            from sqlalchemy import select as _select
+            aides_res = await db.execute(
+                _select(AideSoignant).where(
+                    AideSoignant.medecin_id == actor["id"],
+                    AideSoignant.statut     == "actif",
+                )
             )
+            for aide in aides_res.scalars().all():
+                await push_notif(
+                    db,
+                    dest_id   = aide.id,
+                    type_dest = "aide_soignant",
+                    type_notif= "nouveau_commentaire",
+                    titre     = "Votre médecin a commenté une publication",
+                    message   = f"{actor['nom']} a commenté la publication « {pub.titre} ».",
+                    meta      = {"lien": "/aide/commentaires"},
+                )
 
     await db.commit()
     await db.refresh(c)
