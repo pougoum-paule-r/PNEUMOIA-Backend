@@ -78,6 +78,31 @@ async def poser_question(
     return _serialize(q)
 
 
+# ── GET /questions-admin/faq-publiees ────────────────────────────
+@router.get("/faq-publiees")
+async def faq_publiees_medecin(
+    medecin: Medecin      = Depends(_get_medecin),
+    db:      AsyncSession = Depends(get_db),
+):
+    """Retourne toutes les FAQ publiées — visibles par les médecins connectés."""
+    from app.models.faqPubliee import FAQPubliee
+    result = await db.execute(
+        select(FAQPubliee)
+        .where(FAQPubliee.publie == True)
+        .order_by(desc(FAQPubliee.created_at))
+    )
+    faqs = result.scalars().all()
+    return [
+        {
+            "id":        f.id,
+            "question":  f.question,
+            "reponse":   f.reponse,
+            "categorie": f.categorie,
+        }
+        for f in faqs
+    ]
+
+
 # ── Sérialisation ─────────────────────────────────────────────────
 def _serialize(q: QuestionAdmin) -> dict:
     return {

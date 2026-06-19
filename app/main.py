@@ -20,6 +20,7 @@ from app.routers.messages_equipe  import router as router_messages_equipe
 from app.routers.publications     import router as router_publications
 from app.routers.questions_admin  import router as router_questions_admin
 from app.routers.notifications    import router as router_notifications
+from app.routers.faq_public       import router as router_faq_public
 
 
 app = FastAPI(title="PneumoIA API", version="1.0.0")
@@ -34,6 +35,45 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     message = "Champs invalides : " + " | ".join(champs_manquants)
     print(f"[422] {request.url.path} — {message}")
     return JSONResponse(status_code=422, content={"detail": message})
+
+
+@app.exception_handler(Exception)
+async def global_error_handler(request: Request, exc: Exception):
+    """Attrape toutes les exceptions non gérées et les logue dans le journal d'audit."""
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from fastapi.exceptions import HTTPException as FastAPIHTTPException
+
+    # Ne pas intercepter les erreurs HTTP intentionnelles (401, 403, 404…)
+    if isinstance(exc, (StarletteHTTPException, FastAPIHTTPException)):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+
+    import traceback, logging
+    logging.getLogger(__name__).error(
+        "Erreur système non gérée [%s %s]: %s",
+        request.method, request.url.path, traceback.format_exc()
+    )
+
+    try:
+        from app.models.audit_log import AuditLog
+        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with session_factory() as db:
+            db.add(AuditLog(
+                action  = "erreur_systeme",
+                details = {
+                    "type":    type(exc).__name__,
+                    "message": str(exc)[:500],
+                    "url":     request.url.path,
+                    "method":  request.method,
+                },
+            ))
+            await db.commit()
+    except Exception:
+        pass
+
+    return JSONResponse(status_code=500, content={"detail": "Erreur interne du serveur"})
 
 
 app.add_middleware(
@@ -74,6 +114,7 @@ app.include_router(router_messages_equipe,   prefix="/api/v1")   # /equipe → /
 app.include_router(router_publications,      prefix="/api/v1")   # /publications → /api/v1/publications
 app.include_router(router_questions_admin,  prefix="/api/v1")   # /questions-admin → /api/v1/questions-admin
 app.include_router(router_notifications,   prefix="/api/v1")   # /notifications   → /api/v1/notifications
+app.include_router(router_faq_public,      prefix="/api/v1")   # /faq-public      → /api/v1/faq-public  (sans auth)
 
 
 @app.on_event("startup")

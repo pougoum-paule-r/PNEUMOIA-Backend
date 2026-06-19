@@ -21,6 +21,7 @@ Organisation :
    17. Avis / commentaires         → liste, supprimer, marquer vus
 """
 
+from datetime import datetime
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
@@ -31,6 +32,8 @@ from app.database import get_db
 from app.core.security import get_current_admin, verify_password, create_access_token
 from app.models.admin import Admin
 from app.models.notification import Notification
+from app.models.question_admin import QuestionAdmin
+from app.models.faqPubliee import FAQPubliee
 from app.services.admin_service import AdminService
 from app.schemas.admin import (
     LoginSchema,
@@ -407,6 +410,58 @@ async def repondre_question(
     if not reponse:
         raise HTTPException(400, "La réponse ne peut pas être vide.")
     return await AdminService.repondre_question(db, question_id, reponse, admin.id)
+
+
+@router.post("/faq/questions/{question_id}/publier-faq")
+async def publier_question_en_faq(
+    question_id: str,
+    body:  dict,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Publie une question de médecin directement en FAQ (landing page + médecins).
+    POST /api/admin/faq/questions/{id}/publier-faq
+    Body: { "reponse": "...", "categorie": "Autre" }
+    """
+    q = await db.get(QuestionAdmin, question_id)
+    if not q:
+        raise HTTPException(404, "Question introuvable")
+
+    if q.statut == "en_attente":
+        raise HTTPException(400, "Répondez d'abord à la question avant de la publier en FAQ.")
+
+    reponse = (body.get("reponse") or "").strip() or (q.reponse or "").strip()
+    if not reponse:
+        raise HTTPException(400, "La réponse ne peut pas être vide")
+
+    categorie = (body.get("categorie") or "Autre").strip()
+
+    q.statut     = "publiee_faq"
+    q.reponse    = reponse
+    q.repondu_at = datetime.utcnow()
+
+    faq = FAQPubliee(
+        admin_id  = admin.id,
+        question  = q.titre,
+        reponse   = reponse,
+        categorie = categorie,
+        publie    = True,
+    )
+    db.add(faq)
+    await db.commit()
+    await db.refresh(faq)
+
+    return {
+        "id":         faq.id,
+        "question":   faq.question,
+        "reponse":    faq.reponse,
+        "categorie":  faq.categorie,
+        "publie":     faq.publie,
+        "nb_vues":    faq.nb_vues,
+        "created_at": faq.created_at.isoformat() if faq.created_at else None,
+        "updated_at": None,
+    }
 
 
 @router.delete("/faq/questions/historique")

@@ -297,10 +297,12 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 # ─────────────────────────────────────────────────────────────
 @router.post("/verify-otp", response_model=TokenResponse)
 async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db)):
+    from app.models.audit_log import AuditLog
+
+    # Récupère le dernier OTP non utilisé (indépendamment du code saisi)
     result = await db.execute(
         select(OTPCode)
         .where(OTPCode.medecin_id == body.medecin_id)
-        .where(OTPCode.code       == body.code)
         .where(OTPCode.used       == False)
         .order_by(OTPCode.created_at.desc())
         .limit(1)
@@ -308,13 +310,74 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
     otp_entry = result.scalar_one_or_none()
 
     if not otp_entry:
-        raise HTTPException(401, "Code OTP incorrect")
+        raise HTTPException(401, "Code OTP incorrect ou expiré. Demandez un nouveau code.")
+
     if datetime.utcnow() > otp_entry.expires_at:
         raise HTTPException(401, "Code OTP expiré. Reconnectez-vous pour en recevoir un nouveau.")
 
-    otp_entry.used = True
+    # ── Code incorrect → incrémenter fail_count ───────────────────
+    if otp_entry.code != body.code:
+        otp_entry.fail_count = (otp_entry.fail_count or 0) + 1
+        await db.commit()
 
-    # Marquer la connexion réussie sur le médecin
+        if otp_entry.fail_count >= 3:
+            med_result = await db.execute(select(Medecin).where(Medecin.id == body.medecin_id))
+            medecin    = med_result.scalar_one_or_none()
+
+            if medecin and medecin.statut not in ("corbeille", "rejete"):
+                medecin.statut_precedent = medecin.statut
+                medecin.statut           = "corbeille"
+                medecin.supprime_le      = datetime.utcnow()
+                medecin.supprime_par     = "system"
+
+                db.add(AuditLog(
+                    action     = "compte_bloque_tentatives",
+                    medecin_id = medecin.id,
+                    details    = {
+                        "raison":     "3 tentatives OTP incorrectes consécutives",
+                        "tentatives": otp_entry.fail_count,
+                        "email":      medecin.email,
+                    },
+                ))
+
+                admins = (await db.execute(select(Admin))).scalars().all()
+                for admin in admins:
+                    db.add(Notification(
+                        destinataire_id = admin.id,
+                        type_dest       = "admin",
+                        type_notif      = "compte_bloque_tentatives",
+                        titre           = "Compte médecin bloqué — tentatives suspectes",
+                        message         = (
+                            f"Le compte de Dr. {medecin.prenom} {medecin.nom} ({medecin.email}) "
+                            f"a été mis en corbeille après 3 tentatives OTP incorrectes. "
+                            f"Vous pouvez le restaurer depuis la corbeille."
+                        ),
+                        meta = {
+                            "medecin_id":  medecin.id,
+                            "medecin_nom": f"{medecin.prenom} {medecin.nom}",
+                            "email":       medecin.email,
+                            "actionLink":  "/administrateur/corbeille",
+                        },
+                    ))
+
+                await db.commit()
+
+            raise HTTPException(
+                429,
+                "Votre compte a été bloqué après 3 tentatives incorrectes. "
+                "Contactez l'administrateur pour restaurer votre accès.",
+            )
+
+        restantes = 3 - otp_entry.fail_count
+        raise HTTPException(
+            401,
+            f"Code OTP incorrect. {restantes} tentative(s) restante(s) avant le blocage du compte.",
+        )
+
+    # ── Code correct → succès ──────────────────────────────────────
+    otp_entry.used       = True
+    otp_entry.fail_count = 0
+
     med_result = await db.execute(select(Medecin).where(Medecin.id == body.medecin_id))
     medecin    = med_result.scalar_one_or_none()
     if medecin:
