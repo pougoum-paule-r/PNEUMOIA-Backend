@@ -762,9 +762,9 @@ class AdminService:
                     <p style="margin:0;color:#065f46"><strong>Motif initial de la suspension :</strong> {raison_initiale}</p>
                   </div>
                   <div style="margin:24px 0">
-                    <a href="{settings.FRONTEND_URL}/connexion"
+                    <a href="{settings.FRONTEND_URL}/"
                        style="background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">
-                      Se connecter
+                      Accéder à PneumoIA
                     </a>
                   </div>
                 </div>
