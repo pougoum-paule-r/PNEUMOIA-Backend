@@ -762,9 +762,9 @@ class AdminService:
                     <p style="margin:0;color:#065f46"><strong>Motif initial de la suspension :</strong> {raison_initiale}</p>
                   </div>
                   <div style="margin:24px 0">
-                    <a href="{settings.FRONTEND_URL}/connexion"
+                    <a href="{settings.FRONTEND_URL}/"
                        style="background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">
-                      Se connecter
+                      Accéder à PneumoIA
                     </a>
                   </div>
                 </div>
@@ -1684,15 +1684,32 @@ class AdminService:
         result = await db.execute(query)
         logs   = result.scalars().all()
 
+        _DANGER  = {"erreur_systeme", "compte_bloque_tentatives", "medecin_supprime"}
+        _WARNING = {"medecin_suspendu", "medecin_corbeille", "document_rejete", "demande_rejetee"}
+
+        def _statut(l):
+            if l.action in _DANGER:  return "danger"
+            if l.action in _WARNING: return "warning"
+            return "success"
+
+        def _role(l):
+            if "admin_id" in (l.details or {}): return "Admin"
+            if l.medecin_id:                    return "Médecin"
+            return "Système"
+
         return {
             "logs": [
                 {
                     "id":     l.id,
                     "action": l.action,
                     "acteur": (l.details or {}).get("admin_id", l.medecin_id or "Système"),
+                    "role":   _role(l),
                     "date":   l.created_at.isoformat() if l.created_at else None,
-                    "statut": "success",
+                    "statut": _statut(l),
                     "type":   l.action.split("_")[0] if l.action else "info",
+                    "cible":  (l.details or {}).get("email", l.medecin_id or ""),
+                    "ip":     str(l.ip_address) if l.ip_address else "",
+                    "ville":  "",
                 }
                 for l in logs
             ]
