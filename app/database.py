@@ -14,9 +14,13 @@ engine = create_async_engine(
     pool_size=5,
     max_overflow=10,
     pool_timeout=30,
-    pool_recycle=300,        # Recycle toutes les 5 min (évite connexions stales)
+    pool_recycle=1800,
     pool_pre_ping=True,
-    pool_use_lifo=True,      # Préfère les connexions récentes (plus chaudes)
+    pool_use_lifo=True,
+    connect_args={
+        "timeout": 10,
+        "statement_cache_size": 0,  # requis avec PgBouncer/Supabase transaction pooling
+    },
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 

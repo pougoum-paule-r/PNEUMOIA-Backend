@@ -172,7 +172,11 @@ async def inscription_aide(body: InscriptionAideRequest, db: AsyncSession = Depe
 
     existing = await db.execute(select(AideSoignant).where(AideSoignant.email == body.email))
     if existing.scalar_one_or_none():
-        raise HTTPException(400, "Cet email est déjà utilisé")
+        raise HTTPException(400, "Cet email est déjà utilisé par un autre aide soignant")
+
+    existing_med = await db.execute(select(Medecin).where(Medecin.email == body.email))
+    if existing_med.scalar_one_or_none():
+        raise HTTPException(400, "Cet email est déjà enregistré comme médecin — un même email ne peut pas appartenir aux deux rôles")
 
     aide = AideSoignant(
         medecin_id    = medecin.id,

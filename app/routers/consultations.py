@@ -26,11 +26,21 @@ router = APIRouter(prefix="/api/v1/consultations", tags=["Consultations"])
 # ── Helpers ──────────────────────────────────────────────────────
 
 async def verifier_acces_patient(patient_id: str, medecin_id: str, db: AsyncSession) -> Patient:
+    from app.models.aide_soignant import AideSoignant
+
     patient = await db.get(Patient, patient_id)
     if not patient:
         raise HTTPException(404, "Patient introuvable")
     if patient.created_by == medecin_id:
         return patient
+
+    # Patient créé par un aide soignant qui appartient à ce médecin
+    aide_id = patient.aide_id or patient.created_by_aide
+    if aide_id:
+        aide = await db.get(AideSoignant, aide_id)
+        if aide and aide.medecin_id == medecin_id:
+            return patient
+
     acces = await db.execute(
         select(AccesPatient).where(
             AccesPatient.patient_id           == patient_id,
@@ -395,7 +405,10 @@ async def historique_consultations(
 
     result = await db.execute(
         select(Consultation)
-        .where(Consultation.medecin_id == medecin.id)
+        .where(
+            Consultation.medecin_id == medecin.id,
+            Consultation.statut == "terminee",
+        )
         .options(
             selectinload(Consultation.diagnostic),
             selectinload(Consultation.patient),
@@ -455,11 +468,12 @@ async def historique_consultations(
                 "personne_a_contacter": pat.personne_a_contacter,
             } if pat else None,
             "medecin": {
-                "id":        med.id,
-                "nom":       med.nom,
-                "prenom":    med.prenom,
-                "specialite": getattr(med, 'specialite', None),
-                "ville":     getattr(med, 'ville', None),
+                "id":           med.id,
+                "nom":          med.nom,
+                "prenom":       med.prenom,
+                "specialite":   getattr(med, 'specialite', None),
+                "ville":        getattr(med, 'ville', None),
+                "etablissement": getattr(med, 'etablissement', None),
             } if med else None,
             "diagnostic": {
                 "id":                  c.diagnostic.id,
