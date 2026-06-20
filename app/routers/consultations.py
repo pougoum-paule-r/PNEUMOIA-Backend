@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.database import get_db
 from app.core.security import get_current_medecin
@@ -389,6 +389,34 @@ async def changer_statut_clinique(
         "statut_clinique": c.statut_clinique,
         "consultation_id": consultation_id,
     }
+
+
+# ── GET /consultations/mes-stats — Vrais totaux pour le Dashboard ─
+@router.get("/mes-stats")
+async def mes_stats_consultations(
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    """Compte toutes les consultations du médecin par statut (sans filtre statut)."""
+    r_total = await db.execute(
+        select(func.count(Consultation.id))
+        .where(Consultation.medecin_id == medecin.id)
+    )
+    total = r_total.scalar_one() or 0
+
+    r_term = await db.execute(
+        select(func.count(Consultation.id))
+        .where(Consultation.medecin_id == medecin.id, Consultation.statut == "terminee")
+    )
+    terminee = r_term.scalar_one() or 0
+
+    r_att = await db.execute(
+        select(func.count(Consultation.id))
+        .where(Consultation.medecin_id == medecin.id, Consultation.statut == "en_attente")
+    )
+    en_attente = r_att.scalar_one() or 0
+
+    return {"total": total, "terminee": terminee, "en_attente": en_attente}
 
 
 # ── GET /consultations/historique — Historique enrichi ───────────

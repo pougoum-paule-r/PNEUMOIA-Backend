@@ -37,6 +37,24 @@ async def get_current_user_info(
         raise HTTPException(401, "Token invalide")
 
 
+async def _notifs_enabled(db: AsyncSession, uid: str, type_dest: str) -> bool:
+    """Vérifie si les notifications plateforme sont activées pour cet utilisateur."""
+    try:
+        if type_dest == "medecin":
+            from app.models.medecin import Medecin
+            obj = await db.get(Medecin, uid)
+            if obj:
+                return bool((obj.preferences or {}).get("notifRappelsSysteme", True))
+        elif type_dest == "aide_soignant":
+            from app.models.aide_soignant import AideSoignant
+            obj = await db.get(AideSoignant, uid)
+            if obj:
+                return bool((obj.preferences or {}).get("notif_systeme", True))
+    except Exception:
+        pass
+    return True
+
+
 # ── GET /notifications — lire mes notifications ───────────────────
 @router.get("")
 async def get_notifications(
@@ -46,6 +64,9 @@ async def get_notifications(
     db: AsyncSession = Depends(get_db),
 ):
     uid, type_dest = await get_current_user_info(credentials)
+
+    if not await _notifs_enabled(db, uid, type_dest):
+        return []
 
     q = select(Notification).where(
         Notification.destinataire_id == uid,
@@ -67,6 +88,10 @@ async def count_non_lues(
     db: AsyncSession = Depends(get_db),
 ):
     uid, type_dest = await get_current_user_info(credentials)
+
+    if not await _notifs_enabled(db, uid, type_dest):
+        return {"count": 0}
+
     r = await db.execute(
         select(func.count(Notification.id)).where(
             Notification.destinataire_id == uid,

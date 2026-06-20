@@ -1,8 +1,10 @@
 # app/routers/medecins.py
-from datetime import datetime
+from datetime import datetime, timezone
+import calendar as _calendar
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
+from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from typing import Optional
 
@@ -110,24 +112,24 @@ async def mon_rang(
     db: AsyncSession = Depends(get_db),
     medecin=Depends(get_current_medecin),
 ):
-    """Rang du médecin connecté basé sur nb patients + consultations terminées."""
+    """Rang du médecin connecté — même formule que le classement admin (avg pct IA du mois courant)."""
     mid = medecin.id
+    now   = datetime.now(timezone.utc).replace(tzinfo=None)
+    debut = datetime(now.year, now.month, 1)
+    fin   = datetime(now.year, now.month, _calendar.monthrange(now.year, now.month)[1], 23, 59, 59)
 
-    # Compter patients de ce médecin
+    # ── Infos générales de ce médecin ──────────────────────────────────
     r = await db.execute(
         select(func.count(Patient.id))
         .where(Patient.created_by == mid, Patient.deleted_at.is_(None))
     )
     nb_patients = r.scalar_one() or 0
 
-    # Compter toutes les consultations de ce médecin
     r = await db.execute(
-        select(func.count(Consultation.id))
-        .where(Consultation.medecin_id == mid)
+        select(func.count(Consultation.id)).where(Consultation.medecin_id == mid)
     )
     nb_consultations = r.scalar_one() or 0
 
-    # Cas partagés
     r = await db.execute(
         select(func.count(Consultation.id))
         .where(Consultation.medecin_id == mid)
@@ -135,7 +137,7 @@ async def mon_rang(
     )
     nb_partages = r.scalar_one() or 0
 
-    # Concordance IA/médecin (taux)
+    # ── Concordance IA (taux feedback) — pour le Score IA affiché ──────
     conc_float = case((FeedbackIA.concordance == True, 1.0), else_=0.0)  # noqa: E712
     r = await db.execute(
         select(func.avg(conc_float))
@@ -147,43 +149,40 @@ async def mon_rang(
     raw_conc = r.scalar_one()
     concordance = round(float(raw_conc) * 100, 1) if raw_conc is not None else 0.0
 
-    # Score = patients*2 + consultations*3 + partagés*1
-    mon_score = nb_patients * 2 + nb_consultations * 3 + nb_partages
-
-    # Calculer le score de tous les médecins validés
-    r_all = await db.execute(
-        select(Medecin.id)
+    # ── Classement : même formule que admin (avg pct IA du mois) ───────
+    result = await db.execute(
+        select(Medecin)
         .where(Medecin.statut == "valide")
+        .options(selectinload(Medecin.consultations).selectinload(Consultation.diagnostic))
     )
-    all_ids = [row[0] for row in r_all.fetchall()]
-    total = len(all_ids)
+    all_medecins = result.scalars().all()
+    total = len(all_medecins)
 
-    scores = {}
-    for mid_other in all_ids:
-        rp = await db.execute(
-            select(func.count(Patient.id))
-            .where(Patient.created_by == mid_other, Patient.deleted_at.is_(None))
-        )
-        rp2 = await db.execute(
-            select(func.count(Consultation.id))
-            .where(Consultation.medecin_id == mid_other, Consultation.statut == "terminee")
-        )
-        rp3 = await db.execute(
-            select(func.count(Consultation.id))
-            .where(Consultation.medecin_id == mid_other)
-            .where(Consultation.partage["actif"].astext == "true")
-        )
-        scores[mid_other] = (rp.scalar_one() or 0) * 2 + (rp2.scalar_one() or 0) * 3 + (rp3.scalar_one() or 0)
+    scores_mois: dict[str, float] = {}
+    for md in all_medecins:
+        cons_mois = [
+            c for c in (md.consultations or [])
+            if c.created_at and debut <= c.created_at <= fin
+        ]
+        pcts = []
+        for c in cons_mois:
+            if c.diagnostic and isinstance(c.diagnostic.maladies, list) and c.diagnostic.maladies:
+                pct = c.diagnostic.maladies[0].get("pct")
+                if pct is not None:
+                    pcts.append(float(pct))
+        if pcts:
+            scores_mois[md.id] = sum(pcts) / len(pcts)
 
-    position = sum(1 for s in scores.values() if s > mon_score) + 1
+    mon_score_mois = scores_mois.get(mid, 0.0)
+    position = sum(1 for s in scores_mois.values() if s > mon_score_mois) + 1
 
     return {
-        "position":       position,
-        "total":          max(total, 1),
-        "score_ia":       concordance,
-        "nb_patients":    nb_patients,
+        "position":         position,
+        "total":            max(total, 1),
+        "score_ia":         concordance,
+        "nb_patients":      nb_patients,
         "nb_consultations": nb_consultations,
-        "nb_partages":    nb_partages,
+        "nb_partages":      nb_partages,
     }
 
 

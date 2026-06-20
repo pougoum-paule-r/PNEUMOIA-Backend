@@ -25,6 +25,17 @@ GROUPES = {
 }
 
 
+_SUBSCRIPT_MAP = str.maketrans({
+    '₀': '0', '₁': '1', '₂': '2', '₃': '3',
+    '₄': '4', '₅': '5', '₆': '6', '₇': '7',
+    '₈': '8', '₉': '9',
+    '²': '2', '³': '3',
+})
+
+def _clean(s: str) -> str:
+    return str(s).translate(_SUBSCRIPT_MAP)
+
+
 def _age(dob) -> str:
     if not dob:
         return "—"
@@ -254,7 +265,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         if criteres:
             story.append(Paragraph("Critères cliniques validés", S_SEC))
             story.append(Spacer(1, 4))
-            crit_rows = [[Paragraph(f"[+]  {c}", S_BULLET)] for c in criteres]
+            crit_rows = [[Paragraph(f"[+]  {_clean(c)}", S_BULLET)] for c in criteres]
             crit_t = Table(crit_rows, colWidths=[W])
             crit_t.setStyle(TableStyle([
                 ("GRID",         (0,0), (-1,-1), 0.5, C_GRAY_BDR),
@@ -288,7 +299,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         if recommandations:
             story.append(Paragraph("Recommandations médicales", S_SEC))
             story.append(Spacer(1, 4))
-            reco_rows = [[Paragraph(f"[+]  {r}", S_BULLET)] for r in recommandations]
+            reco_rows = [[Paragraph(f"[+]  {_clean(r)}", S_BULLET)] for r in recommandations]
             reco_t = Table(reco_rows, colWidths=[W])
             reco_t.setStyle(TableStyle([
                 ("GRID",          (0,0), (-1,-1), 0.5, colors.HexColor("#bfdbfe")),
