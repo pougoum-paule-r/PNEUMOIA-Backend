@@ -356,28 +356,24 @@ async def public_temoignages(db: AsyncSession = Depends(get_db)):
         .join(Medecin, Avis.medecin_id == Medecin.id)
         .where(Medecin.statut == "valide", Avis.statut == "publie")
         .order_by(Avis.created_at.desc())
-        .limit(6)
+        .limit(8)
     )
     rows = r.all()
 
-    seen = set()
-    results = []
-    for avis, medecin in rows:
-        if medecin.id not in seen:
-            seen.add(medecin.id)
-            results.append({
-                "nom":        medecin.nom,
-                "prenom":     medecin.prenom,
-                "specialite": medecin.specialite or "Pneumologue",
-                "hopital":    medecin.etablissement or "",
-                "photo_url":  _photo_url(medecin.photo_url),
-                "texte":      avis.commentaire,
-                "note":       avis.note,
-                "ville":      avis.ville or "",
-                "date":       avis.created_at.strftime("%d.%m.%Y"),
-            })
-
-    return results
+    return [
+        {
+            "nom":        medecin.nom,
+            "prenom":     medecin.prenom,
+            "specialite": medecin.specialite or "Pneumologue",
+            "hopital":    medecin.etablissement or "",
+            "photo_url":  _photo_url(medecin.photo_url),
+            "texte":      avis.commentaire,
+            "note":       avis.note,
+            "ville":      avis.ville or "",
+            "date":       avis.created_at.strftime("%d.%m.%Y"),
+        }
+        for avis, medecin in rows
+    ]
 
 
 @router_medecins.get("/public/repartition", tags=["Public"])

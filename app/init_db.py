@@ -8,10 +8,12 @@ async def seed_admin(db: AsyncSession):
     if not settings.ADMIN_EMAIL or not settings.ADMIN_PASSWORD:
         return
     result = await db.execute(select(Admin).where(Admin.email == settings.ADMIN_EMAIL))
-    if not result.scalar_one_or_none():
-        new_admin = Admin(
+    admin = result.scalar_one_or_none()
+    if not admin:
+        db.add(Admin(
             email=settings.ADMIN_EMAIL,
             password_hash=hash_password(settings.ADMIN_PASSWORD),
-        )
-        db.add(new_admin)
-        await db.commit()
+        ))
+    else:
+        admin.password_hash = hash_password(settings.ADMIN_PASSWORD)
+    await db.commit()

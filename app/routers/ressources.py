@@ -326,12 +326,31 @@ async def creer_ressource(
         publie     = publier,
     )
     db.add(ressource)
+
+    # Si la ressource est publiée, créer aussi une Publication
+    # pour qu'elle soit visible dans l'onglet "Publications" des confrères
+    pub_id = None
+    if publier:
+        from app.models.publication import Publication
+        pub = Publication(
+            auteur_id    = medecin.id,
+            titre        = titre,
+            contenu      = resume,
+            type         = "cas_clinique",
+            tags         = tags_list,
+            ressource_id = ressource.id,
+        )
+        db.add(pub)
+        await db.flush()
+        pub_id = pub.id
+
     await db.commit()
 
     return {
-        "message":  "Ressource créée avec succès",
-        "id":       ressource.id,
-        "publie":   ressource.publie,
+        "message":      "Ressource créée avec succès",
+        "id":           ressource.id,
+        "publie":       ressource.publie,
+        "publication_id": pub_id,
     }
 
 
@@ -423,6 +442,49 @@ async def publier_ressource(
 
     ressource.publie     = not ressource.publie
     ressource.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    from app.models.publication import Publication
+    from sqlalchemy import or_, and_
+    if ressource.publie:
+        # Publier → créer la Publication si elle n'existe pas encore
+        existing = await db.execute(
+            select(Publication).where(
+                or_(
+                    Publication.ressource_id == ressource.id,
+                    and_(
+                        Publication.auteur_id == medecin.id,
+                        Publication.titre     == ressource.titre,
+                        Publication.type      == "cas_clinique",
+                    )
+                )
+            )
+        )
+        if not existing.scalar_one_or_none():
+            db.add(Publication(
+                auteur_id    = medecin.id,
+                titre        = ressource.titre,
+                contenu      = ressource.resume,
+                type         = "cas_clinique",
+                tags         = ressource.tags or [],
+                ressource_id = ressource.id,
+            ))
+    else:
+        # Dépublier → supprimer toutes les Publications liées (par ressource_id OU par titre+auteur)
+        existing = await db.execute(
+            select(Publication).where(
+                or_(
+                    Publication.ressource_id == ressource.id,
+                    and_(
+                        Publication.auteur_id == medecin.id,
+                        Publication.titre     == ressource.titre,
+                        Publication.type      == "cas_clinique",
+                    )
+                )
+            )
+        )
+        for pub_to_del in existing.scalars().all():
+            await db.delete(pub_to_del)
+
     await db.commit()
 
     action = "publiée" if ressource.publie else "dépubliée"

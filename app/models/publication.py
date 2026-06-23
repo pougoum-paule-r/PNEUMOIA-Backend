@@ -16,9 +16,10 @@ class Publication(Base):
     __tablename__ = "publications"
 
     id              = Column(String(15), primary_key=True, default=generate_id)
-    communaute_id   = Column(String(15), ForeignKey("communautes.id",   ondelete="CASCADE"),  nullable=False)
-    auteur_id       = Column(String(15), ForeignKey("medecins.id",      ondelete="RESTRICT"), nullable=False)
-    consultation_id = Column(String(15), ForeignKey("consultations.id", ondelete="SET NULL"), nullable=True)
+    communaute_id   = Column(String(15), ForeignKey("communautes.id",        ondelete="SET NULL"), nullable=True)
+    auteur_id       = Column(String(15), ForeignKey("medecins.id",           ondelete="RESTRICT"), nullable=False)
+    consultation_id = Column(String(15), ForeignKey("consultations.id",      ondelete="SET NULL"), nullable=True)
+    ressource_id    = Column(String(30), ForeignKey("ressources_medicales.id", ondelete="SET NULL"), nullable=True)
     titre           = Column(String(300), nullable=False)
     contenu         = Column(Text,        nullable=True)
     type            = Column(

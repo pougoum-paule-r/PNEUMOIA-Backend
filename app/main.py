@@ -121,8 +121,9 @@ app.add_middleware(
         "http://127.0.0.1:5175",
         "http://127.0.0.1:5176",
         "http://127.0.0.1:3000",
+        "null",
     ],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    allow_origin_regex=r"(http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.\d+\.\d+\.\d+):\d+|https://.*\.ngrok(-free)?\.app|https://.*\.ngrok\.io)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -179,19 +180,18 @@ async def startup():
     import asyncio
     from datetime import timezone as _tz
     from sqlalchemy import text
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        for sql in [
-            "ALTER TABLE aides_soignants ADD COLUMN IF NOT EXISTS preferences JSONB DEFAULT '{}'",
-            "ALTER TABLE medecins        ADD COLUMN IF NOT EXISTS preferences JSONB DEFAULT '{}'",
-        ]:
-            await conn.execute(text(sql))
 
-    # ALTER TYPE ADD VALUE doit tourner en dehors d'une transaction (autocommit)
+    # 1. AUTOCOMMIT en premier — CREATE TYPE et ALTER TYPE ADD VALUE
+    #    doivent tourner hors transaction et avant les ADD COLUMN qui les référencent
     async with engine.connect() as conn:
         await conn.execution_options(isolation_level="AUTOCOMMIT")
-        await conn.execute(text("""
-            DO $$ BEGIN
+        for sql in [
+            """DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'auteur_type_commentaire') THEN
+                    CREATE TYPE auteur_type_commentaire AS ENUM ('medecin', 'aide_soignant');
+                END IF;
+            END $$""",
+            """DO $$ BEGIN
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_enum
                     WHERE enumlabel = 'aide_soignant'
@@ -199,10 +199,8 @@ async def startup():
                 ) THEN
                     ALTER TYPE type_destinataire ADD VALUE 'aide_soignant';
                 END IF;
-            END $$
-        """))
-        await conn.execute(text("""
-            DO $$ BEGIN
+            END $$""",
+            """DO $$ BEGIN
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_enum
                     WHERE enumlabel = 'corbeille'
@@ -210,8 +208,49 @@ async def startup():
                 ) THEN
                     ALTER TYPE statut_medecin ADD VALUE 'corbeille';
                 END IF;
-            END $$
-        """))
+            END $$""",
+        ]:
+            await conn.execute(text(sql))
+
+    # 2. Transaction — création des tables + colonnes manquantes
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        for sql in [
+            "ALTER TABLE aides_soignants ADD COLUMN IF NOT EXISTS preferences    JSONB    DEFAULT '{}'",
+            "ALTER TABLE medecins        ADD COLUMN IF NOT EXISTS preferences    JSONB    DEFAULT '{}'",
+            "ALTER TABLE publications    ALTER COLUMN communaute_id DROP NOT NULL",
+            "ALTER TABLE commentaires    ADD COLUMN IF NOT EXISTS parent_id      VARCHAR(15) REFERENCES commentaires(id)    ON DELETE CASCADE",
+            "ALTER TABLE commentaires    ADD COLUMN IF NOT EXISTS auteur_aide_id VARCHAR(15) REFERENCES aides_soignants(id) ON DELETE RESTRICT",
+            "ALTER TABLE commentaires    ADD COLUMN IF NOT EXISTS auteur_type    auteur_type_commentaire NOT NULL DEFAULT 'medecin'",
+            "ALTER TABLE commentaires    ADD COLUMN IF NOT EXISTS likes_count    INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE publications    ADD COLUMN IF NOT EXISTS ressource_id   VARCHAR(30) REFERENCES ressources_medicales(id) ON DELETE SET NULL",
+            # Relier les anciennes Publications aux ressources (backfill)
+            """UPDATE publications p
+               SET ressource_id = r.id
+               FROM ressources_medicales r
+               WHERE p.ressource_id IS NULL
+                 AND p.type = 'cas_clinique'
+                 AND p.auteur_id = r.medecin_id
+                 AND p.titre    = r.titre""",
+            # Supprimer les publications orphelines (ressource dépubliée ou supprimée)
+            """DELETE FROM publications
+               WHERE type = 'cas_clinique'
+                 AND ressource_id IS NOT NULL
+                 AND ressource_id NOT IN (
+                     SELECT id FROM ressources_medicales WHERE publie = TRUE
+                 )""",
+            # Supprimer les publications orphelines sans lien (vieux enregistrements non rétroliés)
+            """DELETE FROM publications p
+               WHERE p.type = 'cas_clinique'
+                 AND p.ressource_id IS NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM ressources_medicales r
+                     WHERE r.medecin_id = p.auteur_id
+                       AND r.titre      = p.titre
+                       AND r.publie     = TRUE
+                 )""",
+        ]:
+            await conn.execute(text(sql))
 
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as db:
@@ -219,6 +258,21 @@ async def startup():
 
     import asyncio
     asyncio.create_task(_nettoyer_requetes_traitees())
+    # Nettoyer les chemins photo_profil orphelins (fichier absent sur disque)
+    from pathlib import Path as _Ph
+    from app.models.medecin import Medecin
+    from sqlalchemy import select as _sel
+    async with async_session() as db:
+        _res = await db.execute(_sel(Medecin).where(Medecin.photo_url != None))
+        _cleaned = 0
+        for _m in _res.scalars().all():
+            if _m.photo_url and not _Ph(_m.photo_url).exists():
+                _m.photo_url = None
+                _cleaned += 1
+        if _cleaned:
+            await db.commit()
+            import logging as _lg
+            _lg.getLogger(__name__).info("Nettoyage : %d chemin(s) photo orphelin(s) effacé(s)", _cleaned)
 
 
 @app.get("/")
