@@ -5,6 +5,7 @@ Accessible par : médecin (poster, commenter, réagir) et aide soignant (lire, c
 """
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc
@@ -137,6 +138,52 @@ async def list_publications(
     return [_serialize_publication(p, actor, with_comments=(with_comments or mine)) for p in pubs]
 
 
+# ── GET /publications/mes-commentaires ───────────────────────────
+@router.get("/mes-commentaires")
+async def mes_commentaires(
+    actor: dict        = Depends(get_actor),
+    db:    AsyncSession = Depends(get_db),
+):
+    """Commentaires postés par le médecin connecté sur les publications des autres."""
+    if actor["type"] != "medecin":
+        return []
+    result = await db.execute(
+        select(Commentaire)
+        .where(Commentaire.auteur_id == actor["id"], Commentaire.parent_id == None)
+        .options(
+            selectinload(Commentaire.likes),
+            selectinload(Commentaire.replies).selectinload(Commentaire.auteur),
+            selectinload(Commentaire.replies).selectinload(Commentaire.auteur_aide),
+            selectinload(Commentaire.replies).selectinload(Commentaire.likes),
+        )
+        .order_by(Commentaire.created_at.desc())
+    )
+    comments = result.scalars().all()
+    if not comments:
+        return []
+    pub_ids = list({c.publication_id for c in comments})
+    pubs_result = await db.execute(select(Publication).where(Publication.id.in_(pub_ids)))
+    pubs_by_id = {p.id: p for p in pubs_result.scalars().all()}
+    output = []
+    for c in comments:
+        pub = pubs_by_id.get(c.publication_id)
+        if not pub or pub.auteur_id == actor["id"]:
+            continue  # exclure les commentaires sur ses propres publications (déjà chargés via mine=true)
+        liked_ids = {lk.auteur_id for lk in c.likes} if c.likes else set()
+        output.append({
+            "id":      c.id,
+            "pub_id":  c.publication_id,
+            "context": pub.titre,
+            "text":    c.contenu,
+            "time":    c.created_at.isoformat() + "Z",
+            "likes":   c.likes_count,
+            "liked":   actor["id"] in liked_ids,
+            "isMe":    True,
+            "replies": [_serialize_commentaire(r, actor["id"]) for r in (c.replies or [])],
+        })
+    return output
+
+
 # ── GET /publications/{id} ────────────────────────────────────────
 @router.get("/{pub_id}")
 async def get_publication(
@@ -241,6 +288,22 @@ async def create_publication(
     }
 
 
+# ── DELETE /publications/{pub_id} ────────────────────────────────
+@router.delete("/{pub_id}", status_code=204)
+async def delete_publication(
+    pub_id: str,
+    actor:  dict        = Depends(get_actor),
+    db:     AsyncSession = Depends(get_db),
+):
+    pub = await db.get(Publication, pub_id)
+    if not pub:
+        raise HTTPException(404, "Publication introuvable")
+    if pub.auteur_id != actor["id"]:
+        raise HTTPException(403, "Vous ne pouvez supprimer que vos propres publications")
+    await db.delete(pub)
+    await db.commit()
+
+
 # ── GET /publications/{id}/commentaires ──────────────────────────
 @router.get("/{pub_id}/commentaires")
 async def list_commentaires(
@@ -332,8 +395,16 @@ async def add_commentaire(
         import logging; logging.getLogger(__name__).warning("notif commentaire: %s", _e)
 
     await db.commit()
-    await db.refresh(c)
-    return _serialize_commentaire(c, actor["id"])
+    return {
+        "id":      c.id,
+        "author":  {"name": actor["nom"], "avatar": "?", "role": actor.get("specialty", "")},
+        "text":    c.contenu,
+        "time":    c.created_at.isoformat() + "Z",
+        "likes":   0,
+        "liked":   False,
+        "isMe":    True,
+        "replies": [],
+    }
 
 
 # ── POST /publications/{pub_id}/commentaires/{cid}/reply ─────────
@@ -381,8 +452,16 @@ async def reply_to_commentaire(
         import logging; logging.getLogger(__name__).warning("push_notif reply: %s", _e)
 
     await db.commit()
-    await db.refresh(c)
-    return _serialize_commentaire(c, actor["id"])
+    return {
+        "id":      c.id,
+        "author":  {"name": actor["nom"], "avatar": "?", "role": actor.get("specialty", "")},
+        "text":    c.contenu,
+        "time":    c.created_at.isoformat() + "Z",
+        "likes":   0,
+        "liked":   False,
+        "isMe":    True,
+        "replies": [],
+    }
 
 
 # ── POST /publications/{pub_id}/commentaires/{cid}/like ──────────
@@ -446,11 +525,13 @@ async def delete_commentaire(
     if not c or c.publication_id != pub_id:
         raise HTTPException(404, "Commentaire introuvable")
 
-    auteur_id = c.auteur_id if c.auteur_type == "medecin" else c.auteur_aide_id
-    if auteur_id != actor["id"]:
-        raise HTTPException(403, "Vous ne pouvez supprimer que vos propres commentaires")
-
     pub = await db.get(Publication, pub_id)
+
+    auteur_commentaire = c.auteur_id if c.auteur_type == "medecin" else c.auteur_aide_id
+    is_comment_author  = auteur_commentaire == actor["id"]
+    is_pub_owner       = pub is not None and pub.auteur_id == actor["id"]
+    if not is_comment_author and not is_pub_owner:
+        raise HTTPException(403, "Vous ne pouvez supprimer que vos propres commentaires ou les commentaires sur vos publications")
     if pub:
         pub.nb_commentaires = max(0, pub.nb_commentaires - 1)
 
@@ -519,6 +600,42 @@ async def react_to_publication(
     return {"reacted": reacted, "type": body.type if reacted else None, "nb_reactions": pub.nb_reactions}
 
 
+# ── GET /publications/{pub_id}/telecharger ────────────────────────
+@router.get("/{pub_id}/telecharger")
+async def telecharger_publication(
+    pub_id: str,
+    actor:  dict        = Depends(get_actor),
+    db:     AsyncSession = Depends(get_db),
+):
+    """Télécharge le PDF associé à une publication (via la ressource liée)."""
+    from pathlib import Path as _Path
+    from app.models.ressource import RessourceMedicale
+
+    pub = await db.get(Publication, pub_id)
+    if not pub:
+        raise HTTPException(404, "Publication introuvable")
+
+    if not pub.ressource_id:
+        raise HTTPException(404, "Aucun document disponible pour cette publication")
+
+    result = await db.execute(
+        select(RessourceMedicale).where(RessourceMedicale.id == pub.ressource_id)
+    )
+    ressource = result.scalar_one_or_none()
+    if not ressource or not ressource.pdf_url:
+        raise HTTPException(404, "Aucun PDF disponible pour cette publication")
+
+    pdf_path = _Path(ressource.pdf_url)
+    if not pdf_path.exists():
+        raise HTTPException(404, "Fichier PDF introuvable sur le serveur")
+
+    ressource.nb_telechargements = (ressource.nb_telechargements or 0) + 1
+    await db.commit()
+
+    safe_name = pub.titre.replace("/", "_").replace("\\", "_")[:80]
+    return FileResponse(pdf_path, media_type="application/pdf", filename=f"{safe_name}.pdf")
+
+
 # ── Sérialisation ─────────────────────────────────────────────────
 def _author_from_pub(pub: Publication) -> dict:
     m = pub.auteur
@@ -550,8 +667,14 @@ def _author_from_com(c: Commentaire) -> dict:
     return {"name": "Inconnu", "avatar": "?", "role": ""}
 
 
-def _serialize_commentaire(c: Commentaire, current_user_id: str) -> dict:
+def _serialize_commentaire(c: Commentaire, current_user_id: str, replies_list=None) -> dict:
     liked_ids = {lk.auteur_id for lk in c.likes} if c.likes else set()
+    if replies_list is None:
+        # accès direct au backref (valide uniquement si déjà eager-loaded)
+        try:
+            replies_list = list(c.replies or [])
+        except Exception:
+            replies_list = []
     return {
         "id":      c.id,
         "author":  _author_from_com(c),
@@ -560,7 +683,7 @@ def _serialize_commentaire(c: Commentaire, current_user_id: str) -> dict:
         "likes":   c.likes_count,
         "liked":   current_user_id in liked_ids,
         "isMe":    (c.auteur_id == current_user_id or c.auteur_aide_id == current_user_id),
-        "replies": [_serialize_commentaire(r, current_user_id) for r in (c.replies or [])],
+        "replies": [_serialize_commentaire(r, current_user_id) for r in replies_list],
     }
 
 
@@ -588,10 +711,19 @@ def _serialize_publication(pub: Publication, actor: dict, with_comments: bool = 
         "liked":          my_reaction is not None,
         "my_reaction":    my_reaction,
         "pinned":         False,
+        "ressource_id":   pub.ressource_id,
     }
 
     if with_comments and pub.commentaires is not None:
-        top_level = [c for c in pub.commentaires if c.parent_id is None]
-        base["commentaires"] = [_serialize_commentaire(c, actor["id"]) for c in top_level]
+        all_coms = list(pub.commentaires)
+        replies_by_parent: dict = {}
+        for c in all_coms:
+            if c.parent_id:
+                replies_by_parent.setdefault(c.parent_id, []).append(c)
+        top_level = [c for c in all_coms if c.parent_id is None]
+        base["commentaires"] = [
+            _serialize_commentaire(c, actor["id"], replies_by_parent.get(c.id, []))
+            for c in top_level
+        ]
 
     return base
