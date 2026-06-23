@@ -14,6 +14,7 @@ from app.models.document_medecin import DocumentMedecin
 from app.models.otp              import OTPCode
 from app.models.admin            import Admin
 from app.models.notification     import Notification
+from app.models.parametre        import Parametre
 from app.schemas.auth            import (LoginRequest, OTPVerifyRequest,
                                           TokenResponse, MessageResponse)
 from app.core.security           import (hash_password, verify_password,
@@ -41,6 +42,17 @@ PHOTO_MAX_SIZE      = 2 * 1024 * 1024          # 2 Mo
 DOCUMENT_MAX_SIZE   = 5 * 1024 * 1024          # 5 Mo
 PHOTO_TYPES_AUTORISES  = {"image/jpeg", "image/png", "image/webp"}
 
+async def _get_params(db: AsyncSession) -> dict:
+    """Retourne les paramètres globaux de la table Parametre (clé 'global')."""
+    try:
+        result = await db.execute(select(Parametre).where(Parametre.cle == "global"))
+        param  = result.scalar_one_or_none()
+        if param and param.valeur:
+            return param.valeur
+    except Exception:
+        pass
+    return {}
+
 def generate_doc_id():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
 
@@ -63,10 +75,10 @@ def valider_photo(photo: UploadFile):
     photo.file.seek(0)
     return contenu
 
-def valider_document(fichier: UploadFile, nom_doc: str):
+def valider_document(fichier: UploadFile, nom_doc: str, max_size: int = DOCUMENT_MAX_SIZE):
     """Vérifie uniquement la taille d'un document (toutes extensions acceptées)."""
     contenu = fichier.file.read()
-    if len(contenu) > DOCUMENT_MAX_SIZE:
+    if len(contenu) > max_size:
         raise HTTPException(
             400,
             f"Fichier '{nom_doc}' trop lourd ({len(contenu)//1024} Ko). Maximum : 5 Mo"
@@ -125,6 +137,9 @@ async def register(
         raise HTTPException(400, "Ce numéro RPPS est déjà enregistré")
 
     # ── 2. Validation photo + documents (taille & type) ───────
+    params_glob   = await _get_params(db)
+    doc_max_bytes = int(params_glob.get("taille_max_fichier_mb", 5)) * 1024 * 1024
+
     valider_photo(photo_profil)
 
     documents_a_sauvegarder = {
@@ -136,7 +151,7 @@ async def register(
         "cni":                    cni,
     }
     for nom_doc, fichier in documents_a_sauvegarder.items():
-        valider_document(fichier, nom_doc)
+        valider_document(fichier, nom_doc, doc_max_bytes)
 
     # ── 3. Créer le médecin (flush pour obtenir l'ID PNEU-) ───
     medecin = Medecin(
@@ -306,6 +321,10 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db)):
     from app.models.audit_log import AuditLog
 
+    params_glob          = await _get_params(db)
+    otp_max              = int(params_glob.get("otp_max_tentatives", 3))
+    duree_session_heures = int(params_glob.get("duree_session_heures", 8))
+
     # Récupère le dernier OTP non utilisé (indépendamment du code saisi)
     result = await db.execute(
         select(OTPCode)
@@ -329,7 +348,7 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
         otp_entry.fail_count = (otp_entry.fail_count or 0) + 1
         await db.commit()
 
-        if otp_entry.fail_count >= 3:
+        if otp_entry.fail_count >= otp_max:
             med_result = await db.execute(select(Medecin).where(Medecin.id == body.medecin_id))
             medecin    = med_result.scalar_one_or_none()
 
@@ -343,7 +362,7 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
                     action     = "compte_bloque_tentatives",
                     medecin_id = medecin.id,
                     details    = {
-                        "raison":     "3 tentatives OTP incorrectes consécutives",
+                        "raison":     f"{otp_max} tentatives OTP incorrectes consécutives",
                         "tentatives": otp_entry.fail_count,
                         "email":      medecin.email,
                     },
@@ -358,7 +377,7 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
                         titre           = "Compte médecin bloqué — tentatives suspectes",
                         message         = (
                             f"Le compte de Dr. {medecin.prenom} {medecin.nom} ({medecin.email}) "
-                            f"a été mis en corbeille après 3 tentatives OTP incorrectes. "
+                            f"a été mis en corbeille après {otp_max} tentatives OTP incorrectes. "
                             f"Vous pouvez le restaurer depuis la corbeille."
                         ),
                         meta = {
@@ -373,11 +392,11 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
 
             raise HTTPException(
                 429,
-                "Votre compte a été bloqué après 3 tentatives incorrectes. "
+                f"Votre compte a été bloqué après {otp_max} tentatives incorrectes. "
                 "Contactez l'administrateur pour restaurer votre accès.",
             )
 
-        restantes = 3 - otp_entry.fail_count
+        restantes = otp_max - otp_entry.fail_count
         raise HTTPException(
             401,
             f"Code OTP incorrect. {restantes} tentative(s) restante(s) avant le blocage du compte.",
@@ -394,7 +413,10 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
 
     await db.commit()
 
-    token = create_access_token({"sub": str(body.medecin_id), "role": "medecin"})
+    token = create_access_token(
+        {"sub": str(body.medecin_id), "role": "medecin"},
+        expires_minutes=duree_session_heures * 60,
+    )
     return {"access_token": token, "token_type": "bearer"}
 
 
@@ -665,6 +687,9 @@ class ResetVerifyOTPRequest(BaseModel):
 
 @router.post("/reset-verify-otp")
 async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depends(get_db)):
+    params_glob = await _get_params(db)
+    otp_max     = int(params_glob.get("otp_max_tentatives", 3))
+
     result = await db.execute(
         select(OTPCode)
         .where(OTPCode.medecin_id == body.medecin_id)
@@ -683,14 +708,14 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
         await db.commit()
         raise HTTPException(401, "Code OTP expiré. Demandez un nouveau code.")
 
-    if otp_entry.fail_count >= 3:
+    if otp_entry.fail_count >= otp_max:
         raise HTTPException(429, "Trop de tentatives incorrectes. Demandez un nouveau code.")
 
     if otp_entry.code != body.code:
         otp_entry.fail_count += 1
         await db.commit()
 
-        if otp_entry.fail_count >= 3:
+        if otp_entry.fail_count >= otp_max:
             # Notifier admin + médecin
             medecin = await db.get(Medecin, body.medecin_id)
             admins  = (await db.execute(select(Admin))).scalars().all()
@@ -708,11 +733,11 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
                 print(f"⚠️ Email médecin non envoyé : {e}")
             raise HTTPException(
                 429,
-                "Compte bloqué après 3 tentatives incorrectes. "
+                f"Compte bloqué après {otp_max} tentatives incorrectes. "
                 "L'administrateur a été notifié. Demandez un nouveau code."
             )
 
-        restantes = 3 - otp_entry.fail_count
+        restantes = otp_max - otp_entry.fail_count
         raise HTTPException(
             401,
             f"Le code à usage unique que vous avez entré est incorrect. "

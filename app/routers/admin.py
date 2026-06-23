@@ -21,7 +21,7 @@ Organisation :
    17. Avis / commentaires         → liste, supprimer, marquer vus
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
@@ -1046,3 +1046,170 @@ async def restaurer_patient_supprime(
     patient.deleted_by = None
     await db.commit()
     return {"message": "Patient restauré avec succès", "patient_id": patient_id}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 18. REQUÊTES MÉDECINS (signalements de bugs / demandes d'assistance)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/requetes")
+async def liste_requetes(
+    statut: Optional[str] = None,
+    db:     AsyncSession  = Depends(get_db),
+    admin:  Admin         = Depends(get_current_admin),
+):
+    from app.models.requete_medecin import RequeteMedecin
+    from app.models.medecin import Medecin
+    from app.services.admin_service import build_url
+    q = (
+        select(RequeteMedecin, Medecin.photo_url)
+        .outerjoin(Medecin, RequeteMedecin.medecin_id == Medecin.id)
+        .order_by(desc(RequeteMedecin.created_at))
+    )
+    if statut:
+        q = q.where(RequeteMedecin.statut == statut)
+    result = await db.execute(q)
+    rows = result.all()
+    return [
+        {
+            "id":            r.id,
+            "medecin_id":    r.medecin_id,
+            "nom_medecin":   r.nom_medecin,
+            "email_medecin": r.email_medecin,
+            "photo_url":     build_url(photo_url),
+            "titre":         r.titre,
+            "categorie":     r.categorie,
+            "description":   r.description,
+            "statut":        r.statut,
+            "action_admin":  r.action_admin,
+            "reponse_admin": r.reponse_admin,
+            "repondu_par":   r.repondu_par,
+            "repondu_le":    r.repondu_le.isoformat() if r.repondu_le else None,
+            "created_at":    r.created_at.isoformat(),
+        }
+        for r, photo_url in rows
+    ]
+
+
+@router.get("/requetes/count")
+async def count_requetes_en_attente(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    from app.models.requete_medecin import RequeteMedecin
+    from sqlalchemy import func
+    result = await db.execute(
+        select(func.count()).select_from(RequeteMedecin)
+        .where(RequeteMedecin.statut == "en_attente")
+    )
+    return {"count": result.scalar() or 0}
+
+
+@router.put("/requetes/{req_id}/repondre")
+async def repondre_requete(
+    req_id: str,
+    body:   dict,
+    db:     AsyncSession = Depends(get_db),
+    admin:  Admin        = Depends(get_current_admin),
+):
+    from app.models.requete_medecin import RequeteMedecin
+    from app.models.notification import Notification
+
+    req = await db.get(RequeteMedecin, req_id)
+    if not req:
+        raise HTTPException(404, "Requête introuvable")
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    req.action_admin  = body.get("action_admin") or None
+    req.reponse_admin = body.get("reponse_admin") or None
+    req.statut        = body.get("statut", "resolu")
+    req.repondu_par   = admin.id
+    req.repondu_le    = now
+    if req.statut in ("resolu", "ferme"):
+        req.traite_le = now
+
+    db.add(Notification(
+        destinataire_id = req.medecin_id,
+        type_dest       = "medecin",
+        type_notif      = "requete_traitee",
+        titre           = "Votre requête a été traitée",
+        message         = (
+            f"Votre requête « {req.titre} » a reçu une réponse de l'administrateur."
+        ),
+        meta = {
+            "lien":       "/medecin/commentaires",
+            "requete_id": req.id,
+        },
+    ))
+    await db.commit()
+    return {"message": "Réponse enregistrée avec succès."}
+
+
+@router.put("/requetes/{req_id}/modifier-reponse")
+async def modifier_reponse_requete(
+    req_id: str,
+    body:   dict,
+    db:     AsyncSession = Depends(get_db),
+    admin:  Admin        = Depends(get_current_admin),
+):
+    from app.models.requete_medecin import RequeteMedecin
+
+    req = await db.get(RequeteMedecin, req_id)
+    if not req:
+        raise HTTPException(404, "Requête introuvable")
+    if not req.repondu_le:
+        raise HTTPException(400, "Cette requête n'a pas encore reçu de réponse.")
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    req.action_admin  = body.get("action_admin", req.action_admin)
+    req.reponse_admin = body.get("reponse_admin", req.reponse_admin)
+    req.repondu_par   = admin.id
+    req.repondu_le    = now
+    nouveau_statut = body.get("statut")
+    if nouveau_statut and nouveau_statut in ("en_attente", "en_cours", "resolu", "ferme"):
+        req.statut = nouveau_statut
+        if nouveau_statut in ("resolu", "ferme") and not req.traite_le:
+            req.traite_le = now
+    await db.commit()
+    return {"message": "Réponse modifiée avec succès."}
+
+
+@router.put("/requetes/{req_id}/statut")
+async def changer_statut_requete(
+    req_id: str,
+    body:   dict,
+    db:     AsyncSession = Depends(get_db),
+    admin:  Admin        = Depends(get_current_admin),
+):
+    from app.models.requete_medecin import RequeteMedecin
+    from app.models.notification import Notification
+
+    req = await db.get(RequeteMedecin, req_id)
+    if not req:
+        raise HTTPException(404, "Requête introuvable")
+    nouveau = body.get("statut")
+    if nouveau not in ("en_attente", "en_cours", "resolu", "ferme"):
+        raise HTTPException(400, "Statut invalide")
+    req.statut = nouveau
+    if nouveau in ("resolu", "ferme") and not req.traite_le:
+        req.traite_le = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    STATUT_LABELS = {
+        "en_attente": "En attente",
+        "en_cours": "En cours de traitement",
+        "resolu": "Résolue",
+        "ferme": "Fermée",
+    }
+    db.add(Notification(
+        destinataire_id = req.medecin_id,
+        type_dest       = "medecin",
+        type_notif      = "requete_statut",
+        titre           = f"Requête mise à jour — {STATUT_LABELS.get(nouveau, nouveau)}",
+        message         = f"Votre requête « {req.titre} » est maintenant : {STATUT_LABELS.get(nouveau, nouveau)}.",
+        meta = {
+            "lien":       "/medecin/commentaires",
+            "requete_id": req.id,
+        },
+    ))
+    await db.commit()
+    return {"message": "Statut mis à jour."}

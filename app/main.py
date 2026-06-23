@@ -28,6 +28,7 @@ from app.routers.publications     import router as router_publications
 from app.routers.questions_admin  import router as router_questions_admin
 from app.routers.notifications    import router as router_notifications
 from app.routers.faq_public       import router as router_faq_public
+from app.routers.requetes         import router as router_requetes
 
 
 app = FastAPI(title="PneumoIA API", version="1.0.0")
@@ -146,10 +147,37 @@ app.include_router(router_publications,      prefix="/api/v1")   # /publications
 app.include_router(router_questions_admin,  prefix="/api/v1")   # /questions-admin → /api/v1/questions-admin
 app.include_router(router_notifications,   prefix="/api/v1")   # /notifications   → /api/v1/notifications
 app.include_router(router_faq_public,      prefix="/api/v1")   # /faq-public      → /api/v1/faq-public  (sans auth)
+app.include_router(router_requetes,        prefix="/api/v1")   # /requetes        → /api/v1/requetes
+
+
+async def _nettoyer_requetes_traitees():
+    """Cron job : supprime les requêtes résolues/fermées vieilles de 7 jours."""
+    import asyncio
+    from datetime import timedelta
+    from sqlalchemy import delete as sa_delete
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from app.models.requete_medecin import RequeteMedecin
+
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    while True:
+        await asyncio.sleep(86400)  # toutes les 24 h
+        seuil = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
+        try:
+            async with session_factory() as db:
+                await db.execute(
+                    sa_delete(RequeteMedecin)
+                    .where(RequeteMedecin.statut.in_(["resolu", "ferme"]))
+                    .where(RequeteMedecin.traite_le < seuil)
+                )
+                await db.commit()
+        except Exception:
+            pass
 
 
 @app.on_event("startup")
 async def startup():
+    import asyncio
+    from datetime import timezone as _tz
     from sqlalchemy import text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -188,6 +216,9 @@ async def startup():
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as db:
         await seed_admin(db)
+
+    import asyncio
+    asyncio.create_task(_nettoyer_requetes_traitees())
 
 
 @app.get("/")
