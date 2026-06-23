@@ -120,8 +120,9 @@ app.add_middleware(
         "http://127.0.0.1:5175",
         "http://127.0.0.1:5176",
         "http://127.0.0.1:3000",
+        "null",
     ],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    allow_origin_regex=r"(http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.\d+\.\d+\.\d+):\d+|https://.*\.ngrok(-free)?\.app|https://.*\.ngrok\.io)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -156,6 +157,9 @@ async def startup():
         for sql in [
             "ALTER TABLE aides_soignants ADD COLUMN IF NOT EXISTS preferences JSONB DEFAULT '{}'",
             "ALTER TABLE medecins        ADD COLUMN IF NOT EXISTS preferences JSONB DEFAULT '{}'",
+            "ALTER TABLE publications    ALTER COLUMN communaute_id DROP NOT NULL",
+            "ALTER TABLE commentaires    ADD COLUMN IF NOT EXISTS parent_id      VARCHAR(15) REFERENCES commentaires(id) ON DELETE CASCADE",
+            "ALTER TABLE commentaires    ADD COLUMN IF NOT EXISTS auteur_aide_id VARCHAR(15) REFERENCES aides_soignants(id) ON DELETE RESTRICT",
         ]:
             await conn.execute(text(sql))
 

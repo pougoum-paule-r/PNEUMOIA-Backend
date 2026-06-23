@@ -38,7 +38,7 @@ class PublicationCreate(BaseModel):
     titre:          str
     contenu:        Optional[str] = None
     type:           str           # cas_clinique | question | article | discussion
-    communaute_id:  str
+    communaute_id:  Optional[str] = None
     tags:           List[str]     = []
     consultation_id: Optional[str] = None
 
@@ -106,6 +106,8 @@ async def list_publications(
                 .selectinload(Commentaire.auteur),
             selectinload(Publication.commentaires)
                 .selectinload(Commentaire.auteur_aide),
+            selectinload(Publication.commentaires)
+                .selectinload(Commentaire.likes),
             selectinload(Publication.reactions),
         )
         .order_by(desc(Publication.created_at))
@@ -221,8 +223,22 @@ async def create_publication(
         import logging; logging.getLogger(__name__).warning("notif admin pub: %s", _e)
 
     await db.commit()
-    await db.refresh(pub)
-    return _serialize_publication(pub, actor)
+    return {
+        "id":             pub.id,
+        "auteur_id":      pub.auteur_id,
+        "casTitle":       pub.titre,
+        "casId":          pub.id,
+        "author":         {"name": actor["nom"], "avatar": "?", "specialty": actor.get("specialty", "")},
+        "text":           pub.contenu or "",
+        "time":           pub.created_at.isoformat() + "Z",
+        "type":           pub.type,
+        "tags":           pub.tags or [],
+        "nb_commentaires": 0,
+        "nb_reactions":   0,
+        "liked":          False,
+        "my_reaction":    None,
+        "pinned":         False,
+    }
 
 
 # ── GET /publications/{id}/commentaires ──────────────────────────
@@ -280,10 +296,11 @@ async def add_commentaire(
     pub.nb_commentaires += 1
     await db.flush()
 
-    from app.services.notification_service import push_notif
-    if pub.auteur_id and pub.auteur_id != actor["id"]:
-        if actor["type"] == "aide_soignant":
-            # Aide commente → notifier le médecin auteur
+    try:
+        from app.services.notification_service import push_notif
+        from app.models.aide_soignant import AideSoignant
+        # 1. Notifier l'auteur de la publication si c'est quelqu'un d'autre
+        if pub.auteur_id and pub.auteur_id != actor["id"]:
             await push_notif(
                 db,
                 dest_id   = pub.auteur_id,
@@ -293,12 +310,10 @@ async def add_commentaire(
                 message   = f"{actor['nom']} a commenté votre publication « {pub.titre} ».",
                 meta      = {"lien": "/medecin/commentaires"},
             )
-        elif actor["type"] == "medecin":
-            # Médecin commente → notifier les aides soignants liés à ce médecin
-            from app.models.aide_soignant import AideSoignant
-            from sqlalchemy import select as _select
+        # 2. Notifier les aides soignants actifs du commentateur (médecin)
+        if actor["type"] == "medecin":
             aides_res = await db.execute(
-                _select(AideSoignant).where(
+                select(AideSoignant).where(
                     AideSoignant.medecin_id == actor["id"],
                     AideSoignant.statut     == "actif",
                 )
@@ -313,6 +328,8 @@ async def add_commentaire(
                     message   = f"{actor['nom']} a commenté la publication « {pub.titre} ».",
                     meta      = {"lien": "/aide/commentaires"},
                 )
+    except Exception as _e:
+        import logging; logging.getLogger(__name__).warning("notif commentaire: %s", _e)
 
     await db.commit()
     await db.refresh(c)

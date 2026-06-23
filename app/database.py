@@ -11,15 +11,15 @@ DATABASE_URL = settings.DATABASE_URL.replace(
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=5,
-    max_overflow=10,
+    pool_size=3,
+    max_overflow=5,
     pool_timeout=30,
     pool_recycle=1800,
     pool_pre_ping=True,
     pool_use_lifo=True,
     connect_args={
         "timeout": 10,
-        "statement_cache_size": 0,  # requis avec PgBouncer/Supabase transaction pooling
+        "statement_cache_size": 0,
     },
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
