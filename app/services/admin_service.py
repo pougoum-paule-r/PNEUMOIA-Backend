@@ -567,9 +567,9 @@ class AdminService:
     @staticmethod
     async def _purger_relances_expirees(db: AsyncSession) -> None:
         """
-        Supprime définitivement les dossiers refusés dont la relance a été envoyée
-        il y a plus de 48h sans que le médecin n'ait resoumis de nouvelle demande
-        (ce qui se traduirait par un changement de statut, donc disparition du filtre 'rejete').
+        Déplace en corbeille les dossiers refusés dont la relance a été envoyée
+        il y a plus de 48h sans que le médecin n'ait resoumis (soft-delete pour
+        éviter les violations NOT NULL sur les FK consultations/documents).
         """
         seuil = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=48)
         result = await db.execute(
@@ -581,10 +581,14 @@ class AdminService:
             )
         )
         expires = result.scalars().all()
+        if not expires:
+            return
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         for m in expires:
-            await db.delete(m)
-        if expires:
-            await db.commit()
+            m.statut          = "corbeille"
+            m.statut_precedent = "rejete"
+            m.supprime_le     = now
+        await db.commit()
 
     @staticmethod
     async def get_demandes_refusees(
@@ -598,7 +602,11 @@ class AdminService:
         query = (
             select(Medecin)
             .where(Medecin.statut == "rejete")
-            .options(selectinload(Medecin.documents), selectinload(Medecin.rejeteur))
+            .options(
+                selectinload(Medecin.documents),
+                selectinload(Medecin.rejeteur),
+                selectinload(Medecin.valideur),
+            )
             .order_by(Medecin.updated_at.desc())
         )
         if ville: query = query.where(Medecin.adresse.ilike(f"%{ville}%"))
@@ -1752,7 +1760,7 @@ class AdminService:
         result = await db.execute(
             select(Medecin)
             .where(Medecin.statut == "corbeille")
-            .options(selectinload(Medecin.documents))
+            .options(selectinload(Medecin.documents), selectinload(Medecin.valideur))
             .order_by(Medecin.supprime_le.desc())
         )
         medecins = result.scalars().all()
