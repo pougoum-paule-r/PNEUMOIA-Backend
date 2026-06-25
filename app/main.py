@@ -262,13 +262,19 @@ async def startup():
     from pathlib import Path as _Ph
     from app.models.medecin import Medecin
     from sqlalchemy import select as _sel
+    _upload_root = _Ph(settings.UPLOAD_DIR).resolve()
     async with async_session() as db:
         _res = await db.execute(_sel(Medecin).where(Medecin.photo_url != None))
         _cleaned = 0
         for _m in _res.scalars().all():
-            if _m.photo_url and not _Ph(_m.photo_url).exists():
-                _m.photo_url = None
-                _cleaned += 1
+            if _m.photo_url:
+                # Convertit "/uploads/PNEU-xxx/photo.jpg" → chemin absolu réel
+                _rel = _m.photo_url.lstrip("/")           # "uploads/PNEU-xxx/photo.jpg"
+                _rel = _rel[len("uploads/"):] if _rel.startswith("uploads/") else _rel
+                _abs = _upload_root / _rel
+                if not _abs.exists():
+                    _m.photo_url = None
+                    _cleaned += 1
         if _cleaned:
             await db.commit()
             import logging as _lg
