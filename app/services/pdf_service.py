@@ -126,7 +126,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
 
         # ── Helper: table data row ─────────────────────────────────
         def row(label, value, lbl_style=S_LBL, val_style=S_VAL):
-            return [Paragraph(label, lbl_style), Paragraph(str(value) if value else "—", val_style)]
+            return [Paragraph(label, lbl_style), Paragraph(str(value) if value else "Aucun", val_style)]
 
         def section_table(data, col_w=(0.38, 0.62), style_extra=None):
             ts = TableStyle([
@@ -186,14 +186,14 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         story.append(Paragraph("Patient", S_SEC))
         story.append(Spacer(1, 4))
 
-        religion_label = RELIGIONS.get(patient.religion or "", patient.religion or "—")
+        religion_label = RELIGIONS.get(patient.religion or "", patient.religion or "Aucun")
         pat_rows = [
             row("ID Patient",       patient.id),
             row("Nom complet",      f"{patient.civilite or ''} {patient.prenom} {patient.nom}".strip()),
             row("Date de naissance", str(patient.date_naissance) if patient.date_naissance else "—"),
             row("Age",              _age(patient.date_naissance)),
-            row("Telephone",        patient.telephone or "—"),
-            row("Groupe sanguin",   patient.groupe_sanguin or "—"),
+            row("Telephone",        patient.telephone or "Aucun"),
+            row("Groupe sanguin",   patient.groupe_sanguin or "Aucun"),
             row("Religion",         religion_label),
         ]
         if patient.religion == "temoin_jehovah":
@@ -318,9 +318,9 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         arret = f"Oui — {prescriptions.get('duree_arret','?')} jours" if prescriptions.get("arret_travail") else "Non"
         hospi = f"Oui — {prescriptions.get('motif_hospitalisation','')}" if prescriptions.get("hospitalisation") else "Non"
         presc_rows = [
-            row("Médicaments",     prescriptions.get("medicaments") or "—"),
-            row("Conseils à domicile", prescriptions.get("conseils_maison") or "—"),
-            row("Recommandations", prescriptions.get("recommandations") or "—"),
+            row("Médicaments",     prescriptions.get("medicaments") or "Aucun"),
+            row("Conseils à domicile", prescriptions.get("conseils_maison") or "Aucun"),
+            row("Recommandations", prescriptions.get("recommandations") or "Aucun"),
             row("Arrêt de travail", arret),
             row("Hospitalisation",  hospi),
             row("Prochain suivi",   prescriptions.get("suivi") or "À définir"),
