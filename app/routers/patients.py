@@ -428,6 +428,52 @@ async def restaurer_patient(
 
 
 
+# ── GET /patients/:id/dossier-pdf — Dossier complet multi-consultations ──
+@router.get("/{patient_id}/dossier-pdf")
+async def telecharger_dossier_patient(
+    patient_id: str,
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from fastapi.responses import Response
+    from app.models.consultation import Consultation
+    from app.models.diagnostic_ia import DiagnosticIA
+    from sqlalchemy.orm import selectinload
+
+    patient = await db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(404, "Patient introuvable")
+    if patient.created_by != medecin.id:
+        acces_result = await db.execute(
+            select(AccesPatient).where(
+                AccesPatient.patient_id           == patient_id,
+                AccesPatient.medecin_demandeur_id == medecin.id,
+                AccesPatient.statut               == "accorde",
+            )
+        )
+        if not acces_result.scalar_one_or_none():
+            raise HTTPException(403, "Accès refusé")
+
+    result = await db.execute(
+        select(Consultation)
+        .where(Consultation.patient_id == patient_id)
+        .options(selectinload(Consultation.diagnostic))
+        .order_by(Consultation.created_at.asc())
+    )
+    consultations = result.scalars().all()
+
+    consultations_avec_diag = [(c, c.diagnostic) for c in consultations]
+
+    from app.services.pdf_service import generer_dossier_pdf
+    pdf_bytes = await generer_dossier_pdf(consultations_avec_diag, patient)
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="dossier_{patient_id}.pdf"'},
+    )
+
+
 # ── GET /patients/:id/consultations ──────────────────────────────
 @router.get("/{patient_id}/consultations")
 async def consultations_patient(
