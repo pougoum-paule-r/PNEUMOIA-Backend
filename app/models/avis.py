@@ -31,6 +31,7 @@ class Avis(Base):
     statut        = Column(String(20),  nullable=False, default="publie")
     vu            = Column(Boolean,     nullable=False, default=False)
     created_at    = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    archived_at   = Column(DateTime,    nullable=True,  default=None)
 
     medecin = relationship("Medecin", lazy="select")
 

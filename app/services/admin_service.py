@@ -1857,6 +1857,7 @@ class AdminService:
         result = await db.execute(
             select(Avis)
             .options(selectinload(Avis.medecin))
+            .where(Avis.archived_at == None)
             .order_by(Avis.created_at.desc())
         )
         return [
@@ -1932,6 +1933,73 @@ class AdminService:
         await db.commit()
 
         return {"message": f"{count} avis marqué(s) comme vu(s).", "count": count}
+
+    @staticmethod
+    async def archiver_avis(db: AsyncSession, avis_id: str, admin_id: str) -> dict:
+        """Archive un avis admin (reste sur la landing page). Cron job le supprime après 7 jours."""
+        from app.models.avis import Avis
+
+        result = await db.execute(select(Avis).where(Avis.id == avis_id))
+        avis = result.scalar_one_or_none()
+        if not avis:
+            raise HTTPException(404, "Avis introuvable.")
+
+        avis.archived_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        avis.vu = True
+        await db.commit()
+
+        await log_admin_action(db, admin_id, "avis_archive",
+            details={"avis_id": avis_id, "medecin_id": avis.medecin_id})
+
+        return {"message": "Avis archivé.", "archived_at": avis.archived_at.isoformat()}
+
+    @staticmethod
+    async def get_avis_archives(db: AsyncSession) -> list[dict]:
+        """Retourne les avis archivés (non encore supprimés par le cron job)."""
+        from app.models.avis import Avis
+        from sqlalchemy.orm import selectinload
+
+        result = await db.execute(
+            select(Avis)
+            .options(selectinload(Avis.medecin))
+            .where(Avis.archived_at != None)
+            .order_by(Avis.archived_at.desc())
+        )
+        return [
+            {
+                "id":           a.id,
+                "civilite":     a.medecin.civilite     if a.medecin else None,
+                "prenom":       a.medecin.prenom        if a.medecin else None,
+                "nom":          a.medecin.nom           if a.medecin else None,
+                "photo_url":    build_url(a.medecin.photo_url) if a.medecin else None,
+                "specialite":   a.medecin.specialite    if a.medecin else None,
+                "etablissement":a.medecin.etablissement if a.medecin else None,
+                "ville":        a.medecin.ville         if a.medecin else None,
+                "note":         a.note,
+                "commentaire":  a.commentaire,
+                "created_at":   a.created_at.isoformat() if a.created_at else None,
+                "archived_at":  a.archived_at.isoformat() if a.archived_at else None,
+                "vu":           True,
+            }
+            for a in result.scalars().all()
+        ]
+
+    @staticmethod
+    async def purge_avis_archives(db: AsyncSession) -> dict:
+        """Supprime les avis archivés depuis plus de 7 jours (appelé par le cron job)."""
+        from app.models.avis import Avis
+        from datetime import timedelta
+
+        limite = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
+        result = await db.execute(
+            select(Avis).where(Avis.archived_at != None, Avis.archived_at <= limite)
+        )
+        avis_expires = result.scalars().all()
+        count = len(avis_expires)
+        for a in avis_expires:
+            await db.delete(a)
+        await db.commit()
+        return {"message": f"{count} avis archivé(s) purgé(s).", "count": count}
 
     @staticmethod
     async def approuver_avis(db: AsyncSession, avis_id: str) -> dict:

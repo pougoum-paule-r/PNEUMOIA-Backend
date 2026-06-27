@@ -966,6 +966,43 @@ async def marquer_avis_vus(
     return await AdminService.marquer_avis_vus(db)
 
 
+@router.get("/avis/archives")
+async def get_avis_archives(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Retourne les avis archivés par l'admin (purge auto après 7 jours via cron).
+    GET /api/admin/avis/archives
+    """
+    return await AdminService.get_avis_archives(db)
+
+
+@router.patch("/avis/{avis_id}/archiver")
+async def archiver_avis(
+    avis_id: str,
+    db:      AsyncSession = Depends(get_db),
+    admin:   Admin        = Depends(get_current_admin),
+):
+    """
+    Archive un avis (reste sur la landing page, disparaît de la vue active admin).
+    PATCH /api/admin/avis/{id}/archiver
+    """
+    return await AdminService.archiver_avis(db, avis_id, admin.id)
+
+
+@router.post("/avis/purge-archives")
+async def purge_avis_archives(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """
+    Supprime manuellement les avis archivés depuis plus de 7 jours.
+    POST /api/admin/avis/purge-archives
+    """
+    return await AdminService.purge_avis_archives(db)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
