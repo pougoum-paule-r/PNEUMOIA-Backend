@@ -433,10 +433,7 @@ async def historique_consultations(
 
     result = await db.execute(
         select(Consultation)
-        .where(
-            Consultation.medecin_id == medecin.id,
-            Consultation.statut == "terminee",
-        )
+        .where(Consultation.medecin_id == medecin.id)
         .options(
             selectinload(Consultation.diagnostic),
             selectinload(Consultation.patient),

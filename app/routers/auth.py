@@ -615,7 +615,7 @@ async def get_documents(
             "type":         d.type_document,
             "label":        LABELS_DOCUMENT.get(d.type_document, d.type_document),
             "nom_fichier":  d.nom_fichier,
-            "url":          f"{settings.BACKEND_URL}{d.url_fichier}" if d.url_fichier.startswith("/") else d.url_fichier,
+            "url":          f"{settings.BACKEND_URL}/{d.url_fichier.lstrip('/')}" if not d.url_fichier.startswith("http") else d.url_fichier,
             "taille_ko":    round(d.taille_octets / 1024) if d.taille_octets else None,
             "date":         d.created_at.strftime("%d/%m/%Y") if d.created_at else None,
         }
