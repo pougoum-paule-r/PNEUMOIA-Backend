@@ -650,6 +650,14 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     if not medecin:
         raise HTTPException(404, "Email introuvable ou inexistant dans la base de données")
 
+    # Compte suspendu ou supprimé → interdit d'envoyer un nouvel OTP
+    if medecin.statut in ('suspendu', 'supprime'):
+        raise HTTPException(
+            403,
+            "Votre compte est suspendu suite à des tentatives suspectes. "
+            "Contactez l'administrateur pour rétablir votre accès."
+        )
+
     # Invalider tout OTP reset précédent encore actif
     await db.execute(
         sa_update(OTPCode)
@@ -720,8 +728,31 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
         await db.commit()
         raise HTTPException(401, "Code OTP expiré. Demandez un nouveau code.")
 
+    # Récupérer le médecin pour vérifier son statut
+    medecin = await db.get(Medecin, body.medecin_id)
+
+    # Compte déjà suspendu → refus immédiat, même si l'OTP existe
+    if medecin and medecin.statut in ('suspendu', 'supprime'):
+        otp_entry.used = True
+        await db.commit()
+        raise HTTPException(
+            423,
+            "Votre compte est suspendu. Contactez l'administrateur pour rétablir votre accès."
+        )
+
     if otp_entry.fail_count >= otp_max:
-        raise HTTPException(429, "Trop de tentatives incorrectes. Demandez un nouveau code.")
+        # OTP épuisé mais compte pas encore suspendu — suspendre maintenant
+        if medecin:
+            medecin.statut            = 'suspendu'
+            medecin.suspension_raison = f"Compte suspendu automatiquement : {otp_max} tentatives OTP incorrectes lors de la réinitialisation du mot de passe."
+            medecin.suspension_par    = None
+            medecin.suspension_le     = datetime.now(timezone.utc).replace(tzinfo=None)
+        otp_entry.used = True
+        await db.commit()
+        raise HTTPException(
+            423,
+            "Votre compte est suspendu. Contactez l'administrateur pour rétablir votre accès."
+        )
 
     if otp_entry.code != body.code:
         otp_entry.fail_count += 1
@@ -732,6 +763,17 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
             # Notifier admin + médecin par email
             medecin = await db.get(Medecin, body.medecin_id)
             admins  = (await db.execute(select(Admin))).scalars().all()
+            # 3e échec → suspension immédiate du compte
+            if medecin:
+                medecin.statut            = 'suspendu'
+                medecin.suspension_raison = f"Compte suspendu automatiquement : {otp_max} tentatives OTP incorrectes lors de la réinitialisation du mot de passe."
+                medecin.suspension_par    = None
+                medecin.suspension_le     = datetime.now(timezone.utc).replace(tzinfo=None)
+            otp_entry.used = True  # OTP inutilisable même si on en reçoit un nouveau
+            await db.commit()
+
+            # Notifier admin + médecin
+            admins = (await db.execute(select(Admin))).scalars().all()
             for admin in admins:
                 try:
                     await send_piratage_admin_email(
@@ -800,6 +842,10 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
                 429,
                 f"Votre compte a été bloqué après {otp_max} tentatives incorrectes. "
                 "Contactez l'administrateur pour débloquer votre accès.",
+            raise HTTPException(
+                423,
+                f"Votre compte a été suspendu après {otp_max} tentatives incorrectes. "
+                "L'administrateur a été notifié. Contactez-le pour rétablir votre accès."
             )
 
         restantes = otp_max - otp_entry.fail_count

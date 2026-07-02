@@ -326,6 +326,8 @@ async def creer_ressource(
         publie     = publier,
     )
     db.add(ressource)
+    # Flush d'abord la ressource pour que la FK publications_ressource_id_fkey soit satisfaite
+    await db.flush()
 
     # Si la ressource est publiée, créer aussi une Publication
     # pour qu'elle soit visible dans l'onglet "Publications" des confrères

@@ -462,6 +462,16 @@ async def telecharger_dossier_patient(
     )
     consultations = result.scalars().all()
 
+    # Règle métier : le dossier n'est pas téléchargeable tant qu'au moins une
+    # consultation est en attente de l'avis du médecin
+    en_attente = [c for c in consultations if c.statut == 'en_attente']
+    if en_attente:
+        n = len(en_attente)
+        raise HTTPException(
+            status_code=403,
+            detail=f"Téléchargement impossible : {n} consultation{'s' if n > 1 else ''} {'sont' if n > 1 else 'est'} encore en attente de l'avis du médecin."
+        )
+
     consultations_avec_diag = [(c, c.diagnostic) for c in consultations]
 
     from app.services.pdf_service import generer_dossier_pdf

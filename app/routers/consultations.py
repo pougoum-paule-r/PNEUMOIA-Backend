@@ -352,6 +352,15 @@ async def telecharger_pdf(
     medecin=Depends(get_current_medecin),
 ):
     c = await get_ma_consultation(consultation_id, medecin.id, db)
+
+    # Règle métier : le bilan n'est pas téléchargeable tant que le médecin
+    # n'a pas donné son avis (statut en_attente)
+    if c.statut == 'en_attente':
+        raise HTTPException(
+            status_code=403,
+            detail="Téléchargement impossible : cette consultation est en attente de l'avis du médecin."
+        )
+
     patient = await db.get(Patient, c.patient_id)
 
     # Charger le diagnostic explicitement — le lazy-load SQLAlchemy est interdit en async
