@@ -32,11 +32,12 @@ class Publication(Base):
     created_at      = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relations
-    communaute   = relationship("Communaute",   back_populates="publications")
-    auteur       = relationship("Medecin",      back_populates="publications")
-    consultation = relationship("Consultation", back_populates="publications")
-    commentaires = relationship("Commentaire",  back_populates="publication", cascade="all, delete-orphan")
-    reactions    = relationship("Reaction",     back_populates="publication", cascade="all, delete-orphan")
+    communaute   = relationship("Communaute",        back_populates="publications")
+    auteur       = relationship("Medecin",            back_populates="publications")
+    consultation = relationship("Consultation",       back_populates="publications")
+    ressource    = relationship("RessourceMedicale",  foreign_keys=[ressource_id])
+    commentaires = relationship("Commentaire",        back_populates="publication", cascade="all, delete-orphan")
+    reactions    = relationship("Reaction",           back_populates="publication", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Publication {self.id} — '{self.titre}' type={self.type}>"

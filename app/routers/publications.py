@@ -103,6 +103,7 @@ async def list_publications(
         select(Publication)
         .options(
             selectinload(Publication.auteur),
+            selectinload(Publication.ressource),
             selectinload(Publication.commentaires)
                 .selectinload(Commentaire.auteur),
             selectinload(Publication.commentaires)
@@ -712,6 +713,7 @@ def _serialize_publication(pub: Publication, actor: dict, with_comments: bool = 
         "my_reaction":    my_reaction,
         "pinned":         False,
         "ressource_id":   pub.ressource_id,
+        "pathologie":     pub.ressource.pathologie if pub.ressource else None,
     }
 
     if with_comments and pub.commentaires is not None:
