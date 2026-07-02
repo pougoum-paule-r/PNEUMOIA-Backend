@@ -46,6 +46,7 @@ from app.models.document_medecin import DocumentMedecin
 from app.core.security import hash_password
 from app.config import settings
 from app.services.audit_helper import log_admin_action
+from app.services.sms_service import notify_medecin_compte_reactive, notify_medecin_compte_bloque
 from app.models.consultation import Consultation
 
 
@@ -778,6 +779,27 @@ class AdminService:
                 </div>
             """,
         )
+
+        # Notification in-app pour le médecin
+        db.add(Notification(
+            destinataire_id = medecin.id,
+            type_dest       = "medecin",
+            type_notif      = "compte_reactive",
+            titre           = "Votre compte a été réactivé",
+            message         = (
+                "Votre compte PneumoIA a été réactivé par l'administrateur. "
+                "Vous pouvez de nouveau vous connecter à la plateforme."
+            ),
+            meta = {"actionLink": "/"},
+        ))
+        await db.commit()
+
+        # SMS au médecin
+        if medecin.telephone:
+            try:
+                await notify_medecin_compte_reactive(medecin.nom, medecin.prenom, medecin.telephone)
+            except Exception as e:
+                print(f"⚠️ SMS réactivation non envoyé : {e}")
 
         await log_admin_action(db, admin_id, "medecin_reactive", medecin_id=medecin.id,
             details={"medecin_nom": f"{medecin.prenom} {medecin.nom}", "email": medecin.email})

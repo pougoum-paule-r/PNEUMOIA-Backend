@@ -1048,6 +1048,22 @@ async def liste_requetes(
     ]
 
 
+@router.get("/medecins/suspendus/bloques-count")
+async def count_comptes_bloques_systeme(
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """Nombre de médecins suspendus par le système (tentatives OTP)."""
+    from sqlalchemy import func
+    from app.models.medecin import Medecin
+    result = await db.execute(
+        select(func.count()).select_from(Medecin)
+        .where(Medecin.statut         == "suspendu")
+        .where(Medecin.suspension_par == "system")
+    )
+    return {"count": result.scalar() or 0}
+
+
 @router.get("/requetes/count")
 async def count_requetes_en_attente(
     db:    AsyncSession = Depends(get_db),
@@ -1170,3 +1186,29 @@ async def changer_statut_requete(
     ))
     await db.commit()
     return {"message": "Statut mis à jour."}
+
+
+@router.delete("/requetes/purger")
+async def purger_requetes(
+    jours: int   = 30,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    """Supprime les requêtes résolues/fermées dont traite_le est antérieur à `jours` jours."""
+    from app.models.requete_medecin import RequeteMedecin
+    from sqlalchemy import delete as sa_delete, and_
+    from datetime import timedelta
+
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=jours)
+    result = await db.execute(
+        sa_delete(RequeteMedecin).where(
+            and_(
+                RequeteMedecin.statut.in_(["resolu", "ferme"]),
+                RequeteMedecin.traite_le.isnot(None),
+                RequeteMedecin.traite_le < cutoff,
+            )
+        )
+    )
+    await db.commit()
+    n = result.rowcount
+    return {"supprimees": n, "message": f"{n} requête{'s' if n != 1 else ''} purgée{'s' if n != 1 else ''}."}

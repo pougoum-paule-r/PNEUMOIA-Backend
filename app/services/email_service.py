@@ -238,6 +238,45 @@ async def send_piratage_admin_email(
     )
 
 
+# ─── Demande de déblocage → Admin ────────────────────────────────────────────
+async def send_deblocage_request_email(
+    admin_email: str, medecin_nom: str, medecin_email: str,
+    medecin_id: str, raison: str,
+) -> None:
+    now = datetime.utcnow().strftime("%d/%m/%Y à %H:%M UTC")
+    await _send(
+        to_email = admin_email,
+        subject  = f"PneumoIA — Demande de déblocage : Dr {medecin_nom}",
+        html     = f"""
+        <div style="font-family:sans-serif;max-width:500px;margin:auto">
+          <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:16px;border-radius:8px;margin-bottom:16px">
+            <h2 style="color:#1d4ed8;margin:0 0 8px">🔓 Demande de déblocage de compte</h2>
+            <p style="margin:0;color:#1e3a5f">
+              Un médecin dont le compte a été suspendu automatiquement demande le rétablissement de son accès.
+            </p>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:14px">
+            <tr><td style="padding:8px;color:#6b7280;width:140px">Médecin</td>
+                <td style="padding:8px;font-weight:bold">Dr. {medecin_nom}</td></tr>
+            <tr style="background:#f9fafb">
+                <td style="padding:8px;color:#6b7280">Email</td>
+                <td style="padding:8px">{medecin_email}</td></tr>
+            <tr><td style="padding:8px;color:#6b7280">Identifiant</td>
+                <td style="padding:8px;font-family:monospace;font-size:12px">{medecin_id}</td></tr>
+            <tr style="background:#f9fafb">
+                <td style="padding:8px;color:#6b7280">Motif blocage</td>
+                <td style="padding:8px;color:#dc2626">{raison}</td></tr>
+            <tr><td style="padding:8px;color:#6b7280">Date demande</td>
+                <td style="padding:8px">{now}</td></tr>
+          </table>
+          <p style="color:#6b7280;font-size:13px;margin-top:16px">
+            Connectez-vous au tableau de bord administrateur pour débloquer ce compte si la demande est légitime.
+          </p>
+        </div>
+        """,
+    )
+
+
 # ─── Alerte piratage → Médecin ───────────────────────────────────────────────
 async def send_piratage_medecin_email(to_email: str, nom: str) -> None:
     now = datetime.utcnow().strftime("%d/%m/%Y à %H:%M UTC")

@@ -154,7 +154,7 @@ app.include_router(router_requetes,        prefix="/api/v1")   # /requetes      
 async def _nettoyer_requetes_traitees():
     """Cron job : supprime les requêtes résolues/fermées vieilles de 7 jours."""
     import asyncio
-    from datetime import timedelta
+    from datetime import datetime, timezone, timedelta
     from sqlalchemy import delete as sa_delete
     from sqlalchemy.ext.asyncio import async_sessionmaker
     from app.models.requete_medecin import RequeteMedecin

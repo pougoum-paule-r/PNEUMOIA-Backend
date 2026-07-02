@@ -27,9 +27,43 @@ class NotificationService:
             )
         return await run_in_threadpool(send)
 
+    @staticmethod
+    async def notify_medecin_compte_reactive(nom: str, prenom: str, phone: str):
+        def send():
+            return client.messages.create(
+                body=(
+                    f"[PneumoIA] Bonjour Dr {prenom} {nom}, "
+                    f"votre compte a été réactivé par l'administrateur. "
+                    f"Vous pouvez vous reconnecter à la plateforme."
+                ),
+                from_=settings.TWILIO_PHONE_NUMBER,
+                to=phone,
+            )
+        return await run_in_threadpool(send)
+
+    @staticmethod
+    async def notify_medecin_compte_bloque(nom: str, prenom: str, phone: str):
+        def send():
+            return client.messages.create(
+                body=(
+                    f"[PneumoIA] Bonjour Dr {prenom} {nom}, "
+                    f"votre compte a été suspendu suite à plusieurs tentatives incorrectes. "
+                    f"Contactez l'administrateur pour le débloquer."
+                ),
+                from_=settings.TWILIO_PHONE_NUMBER,
+                to=phone,
+            )
+        return await run_in_threadpool(send)
+
 
 async def notify_admin_new_medecin(nom: str, prenom: str, specialite: str, admin_phone: str):
     return await NotificationService.notify_admin_new_medecin(nom, prenom, specialite, admin_phone)
 
 async def send_otp_sms(otp: str, phone: str):
     return await NotificationService.send_otp_sms(otp, phone)
+
+async def notify_medecin_compte_reactive(nom: str, prenom: str, phone: str):
+    return await NotificationService.notify_medecin_compte_reactive(nom, prenom, phone)
+
+async def notify_medecin_compte_bloque(nom: str, prenom: str, phone: str):
+    return await NotificationService.notify_medecin_compte_bloque(nom, prenom, phone)
