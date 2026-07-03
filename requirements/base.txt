@@ -1,0 +1,53 @@
+# ============================================================
+#  PneumoIA — Dépendances Python (Base)
+#  Installer avec : pip install -r requirements/base.txt
+# ============================================================
+
+# ---------- API & Serveur ----------
+fastapi>=0.111.0,<0.112.0
+uvicorn[standard]>=0.29.0,<0.30.0
+python-multipart>=0.0.9,<0.1.0      # upload fichiers (multipart/form-data)
+
+# ---------- Base de données ----------
+sqlalchemy>=2.0.0,<2.1.0
+alembic>=1.13.0,<1.14.0
+asyncpg>=0.29.0,<0.30.0              # driver PostgreSQL async
+psycopg2-binary>=2.9.9,<2.10.0       # driver PostgreSQL sync (migrations Alembic)
+
+# ---------- Validation & Sérialisation ----------
+pydantic>=2.7.0,<2.8.0
+pydantic-settings>=2.2.0,<2.3.0      # lecture du .env
+email-validator>=2.0.0,<2.1.0        # validation EmailStr (pydantic)
+
+# ---------- Sécurité & Auth ----------
+python-jose[cryptography]>=3.3.0,<3.4.0   # JWT (HS256)
+passlib[bcrypt]>=1.7.4,<1.8.0             # hash passwords bcrypt
+pyotp>=2.9.0,<2.10.0                      # génération OTP 6 chiffres
+slowapi>=0.1.9,<0.2.0                     # rate limiting
+
+# ---------- Email & SMS ----------
+aiosmtplib>=3.0.0,<3.1.0              # envoi SMTP async (Gmail, Brevo relay, Mailtrap…)
+httpx>=0.27.0,<0.28.0                 # client HTTP async
+twilio>=9.0.0,<9.1.0                  # SMS (Twilio)
+
+# ---------- Tâches asynchrones ----------
+celery[redis]>=5.3.0,<5.4.0           # workers async (emails, SMS, PDF)
+redis>=5.0.0,<5.1.0                   # broker Celery + cache OTP
+
+# ---------- Stockage fichiers ----------
+boto3>=1.34.0,<1.35.0                 # AWS S3
+
+# ---------- Génération PDF ----------
+weasyprint>=62.0,<63.0                # PDF bilans de consultation
+
+# ---------- Intelligence Artificielle ----------
+scikit-learn==1.8.0                   # modèle de classification (version figée — doit matcher celle utilisée pour entraîner le .pkl)
+joblib>=1.4.0,<1.5.0                  # sérialisation/désérialisation modèle (.pkl)
+shap>=0.45.0,<0.46.0                  # explication des prédictions (SHAP values)
+pandas>=2.2.0,<2.3.0                  # manipulation des données
+numpy>=1.26.0,<1.27.0                 # calcul numérique
+pillow>=10.0.0,<10.1.0                # redimensionnement photos profil
+
+# ---------- Utilitaires ----------
+python-dotenv>=1.0.0,<1.1.0           # chargement .env en local
+python-json-logger>=2.0.0,<2.1.0      # JSON logging
