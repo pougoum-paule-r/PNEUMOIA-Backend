@@ -27,7 +27,7 @@ NOTE : Adaptez les imports des modèles selon votre structure de projet.
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, cast, Date
+from sqlalchemy import select, func, cast, Date, update
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 from datetime import datetime, timedelta, timezone
@@ -778,6 +778,19 @@ class AdminService:
                   </div>
                 </div>
             """,
+        )
+
+        # Marquer les notifications de blocage sécurité pour ce médecin comme lues
+        from app.models.notification import Notification
+        await db.execute(
+            update(Notification)
+            .where(
+                Notification.type_notif == "compte_bloque_tentatives",
+                Notification.type_dest  == "admin",
+                Notification.lu         == False,
+                Notification.meta["medecin_id"].astext == str(medecin.id),
+            )
+            .values(lu=True)
         )
 
         # Notification in-app pour le médecin

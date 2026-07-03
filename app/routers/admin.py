@@ -1058,8 +1058,8 @@ async def count_comptes_bloques_systeme(
     from app.models.medecin import Medecin
     result = await db.execute(
         select(func.count()).select_from(Medecin)
-        .where(Medecin.statut         == "suspendu")
-        .where(Medecin.suspension_par == "system")
+        .where(Medecin.statut == "suspendu")
+        .where(Medecin.suspension_par == None)
     )
     return {"count": result.scalar() or 0}
 
@@ -1212,3 +1212,42 @@ async def purger_requetes(
     await db.commit()
     n = result.rowcount
     return {"supprimees": n, "message": f"{n} requête{'s' if n != 1 else ''} purgée{'s' if n != 1 else ''}."}
+
+
+# ─────────────────────────────────────────────────────────────
+#  POST /api/admin/medecins/{medecin_id}/envoyer-email-deblocage
+#  Renvoie manuellement l'email avec lien de déblocage au médecin suspendu
+# ─────────────────────────────────────────────────────────────
+@router.post("/medecins/{medecin_id}/envoyer-email-deblocage")
+async def envoyer_email_deblocage(
+    medecin_id: str,
+    db:    AsyncSession = Depends(get_db),
+    admin: Admin        = Depends(get_current_admin),
+):
+    from app.models.medecin import Medecin
+    from app.services.email_service import send_piratage_medecin_email
+    from app.config import settings
+
+    medecin = await db.get(Medecin, medecin_id)
+    if not medecin:
+        raise HTTPException(404, "Médecin introuvable")
+    if medecin.statut != "suspendu":
+        raise HTTPException(400, "Ce compte n'est pas suspendu")
+
+    # Régulariser les anciens comptes sans suspension_par
+    if not medecin.suspension_par:
+        medecin.suspension_par = None
+        await db.commit()
+
+    deblocage_token = create_access_token(
+        {"sub": medecin.id, "type": "deblocage_email"},
+        expires_minutes=60 * 24 * 7,
+    )
+    deblocage_link = f"{settings.FRONTEND_URL}/deblocage-email?token={deblocage_token}"
+
+    try:
+        await send_piratage_medecin_email(medecin.email, f"{medecin.prenom} {medecin.nom}", deblocage_link)
+    except Exception as e:
+        raise HTTPException(500, f"Erreur envoi email : {e}")
+
+    return {"message": f"Email de déblocage envoyé à {medecin.email}"}

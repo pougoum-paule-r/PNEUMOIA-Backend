@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -273,6 +273,10 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     result  = await db.execute(select(Medecin).where(Medecin.email == body.email))
     medecin = result.scalar_one_or_none()
 
+    # Compte suspendu : signaler AVANT la vérification du mot de passe
+    if medecin and medecin.statut == "suspendu":
+        raise HTTPException(403, detail={"message": "Votre compte est suspendu. Contactez l'administrateur.", "medecin_id": str(medecin.id)})
+
     if not medecin or not verify_password(body.password, medecin.password_hash):
         raise HTTPException(401, "Email ou mot de passe incorrect")
 
@@ -280,8 +284,6 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(403, "Votre compte est en attente de validation par l'administrateur")
     if medecin.statut == "rejete":
         raise HTTPException(403, "Votre inscription a été refusée. Vérifiez votre email.")
-    if medecin.statut == "suspendu":
-        raise HTTPException(403, "Votre compte est suspendu. Contactez l'administrateur.")
 
     # Générer OTP
     otp    = generate_otp()
@@ -356,7 +358,7 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
             if medecin and medecin.statut not in ("suspendu", "corbeille", "rejete"):
                 medecin.statut            = "suspendu"
                 medecin.suspension_le     = datetime.utcnow()
-                medecin.suspension_par    = "system"
+                medecin.suspension_par    = None
                 medecin.suspension_raison = (
                     f"Compte bloqué – {otp_max} tentatives OTP incorrectes lors de la connexion"
                 )
@@ -386,7 +388,7 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
                             f"Vous pouvez le réactiver depuis la page Médecins suspendus."
                         ),
                         meta = {
-                            "medecin_id":  medecin.id,
+                            "medecin_id":  str(medecin.id),
                             "medecin_nom": f"{medecin.prenom} {medecin.nom}",
                             "email":       medecin.email,
                             "actionLink":  "/administrateur/suspendus",
@@ -395,12 +397,22 @@ async def verify_otp(body: OTPVerifyRequest, db: AsyncSession = Depends(get_db))
 
                 await db.commit()
 
-                # SMS au médecin
+                # Email + SMS via asyncio.create_task (fonctionne même après raise HTTPException)
+                try:
+                    deblocage_token = create_access_token(
+                        {"sub": str(medecin.id), "type": "deblocage_email"},
+                        expires_minutes=60 * 24 * 7,
+                    )
+                    deblocage_link = f"{settings.FRONTEND_URL}/deblocage-email?token={deblocage_token}"
+                except Exception:
+                    deblocage_link = ""
+                asyncio.create_task(
+                    send_piratage_medecin_email(medecin.email, medecin.nom, deblocage_link)
+                )
                 if medecin.telephone:
-                    try:
-                        await notify_medecin_compte_bloque(medecin.nom, medecin.prenom, medecin.telephone)
-                    except Exception as e:
-                        print(f"⚠️ SMS blocage non envoyé : {e}")
+                    asyncio.create_task(
+                        notify_medecin_compte_bloque(medecin.nom, medecin.prenom, medecin.telephone)
+                    )
 
             raise HTTPException(
                 429,
@@ -760,44 +772,19 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
 
         if otp_entry.fail_count >= otp_max:
             from app.models.audit_log import AuditLog
-            # Notifier admin + médecin par email
             medecin = await db.get(Medecin, body.medecin_id)
             admins  = (await db.execute(select(Admin))).scalars().all()
-            # 3e échec → suspension immédiate du compte
-            if medecin:
-                medecin.statut            = 'suspendu'
-                medecin.suspension_raison = f"Compte suspendu automatiquement : {otp_max} tentatives OTP incorrectes lors de la réinitialisation du mot de passe."
-                medecin.suspension_par    = None
-                medecin.suspension_le     = datetime.now(timezone.utc).replace(tzinfo=None)
-            otp_entry.used = True  # OTP inutilisable même si on en reçoit un nouveau
-            await db.commit()
 
-            # Notifier admin + médecin
-            admins = (await db.execute(select(Admin))).scalars().all()
-            for admin in admins:
-                try:
-                    await send_piratage_admin_email(
-                        admin.email, medecin.nom, medecin.email,
-                        medecin.id, otp_entry.fail_count
-                    )
-                except Exception as e:
-                    print(f"⚠️ Email admin non envoyé : {e}")
-            try:
-                await send_piratage_medecin_email(medecin.email, medecin.nom)
-            except Exception as e:
-                print(f"⚠️ Email médecin non envoyé : {e}")
-
-            # Bloquer le compte (suspension sécurité)
+            # Suspendre le compte
             if medecin and medecin.statut not in ("suspendu", "corbeille", "rejete"):
                 medecin.statut            = "suspendu"
-                medecin.suspension_le     = datetime.utcnow()
-                medecin.suspension_par    = "system"
                 medecin.suspension_raison = (
                     f"Compte bloqué – {otp_max} tentatives OTP incorrectes "
                     "lors de la réinitialisation du mot de passe"
                 )
-                medecin.suspension_duree  = "Indéfinie"
-
+                medecin.suspension_par   = None
+                medecin.suspension_le    = datetime.now(timezone.utc).replace(tzinfo=None)
+                medecin.suspension_duree = "Indéfinie"
                 db.add(AuditLog(
                     action     = "compte_bloque_tentatives",
                     medecin_id = medecin.id,
@@ -808,7 +795,6 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
                         "type":       "reset_password",
                     },
                 ))
-
                 for admin in admins:
                     db.add(Notification(
                         destinataire_id = admin.id,
@@ -818,30 +804,43 @@ async def reset_verify_otp(body: ResetVerifyOTPRequest, db: AsyncSession = Depen
                         message         = (
                             f"Le compte de Dr. {medecin.prenom} {medecin.nom} ({medecin.email}) "
                             f"a été suspendu après {otp_max} tentatives OTP incorrectes "
-                            f"lors de la réinitialisation du mot de passe. "
-                            f"Vous pouvez le réactiver depuis la page Médecins suspendus."
+                            f"lors de la réinitialisation du mot de passe."
                         ),
                         meta = {
-                            "medecin_id":  medecin.id,
+                            "medecin_id":  str(medecin.id),
                             "medecin_nom": f"{medecin.prenom} {medecin.nom}",
                             "email":       medecin.email,
                             "actionLink":  "/administrateur/suspendus",
                         },
                     ))
 
-                await db.commit()
+            otp_entry.used = True
+            await db.commit()
 
-                # SMS au médecin
+            # Emails via asyncio.create_task (s'exécutent même après raise HTTPException)
+            if medecin:
+                try:
+                    deblocage_token = create_access_token(
+                        {"sub": str(medecin.id), "type": "deblocage_email"},
+                        expires_minutes=60 * 24 * 7,
+                    )
+                    deblocage_link = f"{settings.FRONTEND_URL}/deblocage-email?token={deblocage_token}"
+                except Exception:
+                    deblocage_link = ""
+                for admin in admins:
+                    asyncio.create_task(
+                        send_piratage_admin_email(
+                            admin.email, medecin.nom, medecin.email, medecin.id, otp_entry.fail_count
+                        )
+                    )
+                asyncio.create_task(
+                    send_piratage_medecin_email(medecin.email, medecin.nom, deblocage_link)
+                )
                 if medecin.telephone:
-                    try:
-                        await notify_medecin_compte_bloque(medecin.nom, medecin.prenom, medecin.telephone)
-                    except Exception as e:
-                        print(f"⚠️ SMS blocage reset non envoyé : {e}")
+                    asyncio.create_task(
+                        notify_medecin_compte_bloque(medecin.nom, medecin.prenom, medecin.telephone)
+                    )
 
-            raise HTTPException(
-                429,
-                f"Votre compte a été bloqué après {otp_max} tentatives incorrectes. "
-                "Contactez l'administrateur pour débloquer votre accès.",
             raise HTTPException(
                 423,
                 f"Votre compte a été suspendu après {otp_max} tentatives incorrectes. "
@@ -1036,8 +1035,8 @@ async def demande_deblocage(body: DemandeDeblocageRequest, db: AsyncSession = De
     medecin = await db.get(Medecin, body.medecin_id)
     if not medecin:
         raise HTTPException(404, "Médecin introuvable")
-    if medecin.statut != "suspendu" or medecin.suspension_par != "system":
-        raise HTTPException(400, "Ce compte n'est pas bloqué par le système")
+    if medecin.statut != "suspendu":
+        raise HTTPException(400, "Ce compte n'est pas suspendu")
 
     # Éviter les doublons : une seule demande en attente par médecin
     existing = await db.execute(
@@ -1083,6 +1082,80 @@ async def demande_deblocage(body: DemandeDeblocageRequest, db: AsyncSession = De
                 "medecin_id":  medecin.id,
                 "medecin_nom": f"{medecin.prenom} {medecin.nom}",
                 "actionLink":  "/administrateur/requetes",
+            },
+        ))
+
+    await db.commit()
+    return {"message": "Votre demande a été envoyée à l'administrateur. Il la traitera dans les meilleurs délais."}
+
+
+# ─────────────────────────────────────────────────────────────
+#  POST /api/v1/auth/demande-deblocage-token
+#  Depuis le lien email → valide le token signé puis crée la demande
+# ─────────────────────────────────────────────────────────────
+class DemandeDeblocageTokenRequest(BaseModel):
+    token: str
+
+@router.post("/demande-deblocage-token")
+async def demande_deblocage_token(body: DemandeDeblocageTokenRequest, db: AsyncSession = Depends(get_db)):
+    from app.models.requete_medecin import RequeteMedecin
+    from jose import JWTError
+    try:
+        payload = decode_token(body.token)
+    except JWTError:
+        raise HTTPException(401, "Lien expiré ou invalide. Contactez l'administrateur directement.")
+
+    if payload.get("type") != "deblocage_email":
+        raise HTTPException(401, "Token non autorisé pour cette opération.")
+
+    medecin_id = payload.get("sub")
+    medecin    = await db.get(Medecin, medecin_id)
+    if not medecin:
+        raise HTTPException(404, "Médecin introuvable.")
+    if medecin.statut != "suspendu":
+        return {"message": "Votre compte a déjà été rétabli ou n'est pas en attente de déblocage."}
+
+    existing = await db.execute(
+        select(RequeteMedecin)
+        .where(RequeteMedecin.medecin_id == medecin.id)
+        .where(RequeteMedecin.action_admin == "deblocage")
+        .where(RequeteMedecin.statut.in_(["en_attente", "en_cours"]))
+    )
+    if existing.scalar_one_or_none():
+        return {"message": "Une demande est déjà en cours de traitement par l'administrateur."}
+
+    requete = RequeteMedecin(
+        medecin_id    = medecin.id,
+        nom_medecin   = f"Dr. {medecin.prenom} {medecin.nom}",
+        email_medecin = medecin.email,
+        titre         = "Demande de déblocage de compte",
+        categorie     = "probleme_acces",
+        description   = (
+            f"Mon compte a été bloqué automatiquement suite à plusieurs tentatives OTP incorrectes.\n"
+            f"Motif du blocage : {medecin.suspension_raison or 'Tentatives OTP incorrectes'}.\n"
+            f"Je demande le rétablissement de mon accès à la plateforme PneumoIA."
+        ),
+        statut        = "en_attente",
+        action_admin  = "deblocage",
+    )
+    db.add(requete)
+
+    admins = (await db.execute(select(Admin))).scalars().all()
+    for admin in admins:
+        db.add(Notification(
+            destinataire_id = admin.id,
+            type_dest       = "admin",
+            type_notif      = "deblocage_compte",
+            titre           = "Demande de déblocage de compte",
+            message         = (
+                f"Dr. {medecin.prenom} {medecin.nom} ({medecin.email}) "
+                f"demande le déblocage de son compte suspendu via email. "
+                f"Consultez la page Comptes suspendus pour traiter cette demande."
+            ),
+            meta = {
+                "medecin_id":  medecin.id,
+                "medecin_nom": f"{medecin.prenom} {medecin.nom}",
+                "actionLink":  "/administrateur/suspendus",
             },
         ))
 

@@ -278,31 +278,44 @@ async def send_deblocage_request_email(
 
 
 # ─── Alerte piratage → Médecin ───────────────────────────────────────────────
-async def send_piratage_medecin_email(to_email: str, nom: str) -> None:
+async def send_piratage_medecin_email(to_email: str, nom: str, deblocage_link: str = "") -> None:
     now = datetime.utcnow().strftime("%d/%m/%Y à %H:%M UTC")
+    btn = (
+        f'<div style="text-align:center;margin-top:16px">'
+        f'<a href="{deblocage_link}" '
+        f'style="display:inline-block;padding:12px 28px;background:#2563eb;color:#fff;'
+        f'border-radius:8px;text-decoration:none;font-weight:bold;font-size:15px">'
+        f'Contacter l\'administrateur</a>'
+        f'<p style="color:#9ca3af;font-size:11px;margin-top:8px">Ce lien est valable 7 jours.</p>'
+        f'</div>'
+        if deblocage_link else ""
+    )
     await _send(
         to_email = to_email,
-        subject  = "🚨 PneumoIA — Activité suspecte sur votre compte",
+        subject  = "🚨 PneumoIA — Votre compte a été suspendu",
         html     = f"""
         <div style="font-family:sans-serif;max-width:500px;margin:auto">
           <div style="background:#fef2f2;border-left:4px solid #dc2626;padding:16px;border-radius:8px;margin-bottom:16px">
-            <h2 style="color:#dc2626;margin:0 0 8px">⚠️ Alerte de sécurité</h2>
+            <h2 style="color:#dc2626;margin:0 0 8px">⚠️ Compte suspendu</h2>
             <p style="margin:0;color:#7f1d1d">
-              3 tentatives incorrectes de réinitialisation de mot de passe ont été
-              détectées sur votre compte PneumoIA.
+              Votre compte PneumoIA a été suspendu automatiquement pour des raisons de sécurité.
             </p>
           </div>
           <p style="color:#374151">Bonjour Dr {nom},</p>
           <p style="color:#374151">
-            Le <strong>{now}</strong>, quelqu'on a tenté 3 fois de réinitialiser
-            le mot de passe de votre compte sans succès.
+            Le <strong>{now}</strong>, plusieurs tentatives incorrectes ont été détectées sur votre compte.
+            Par mesure de sécurité, votre accès a été <strong style="color:#dc2626">suspendu automatiquement</strong>.
           </p>
-          <p style="color:#dc2626;font-weight:bold">
-            Si ce n'était PAS vous, votre compte est peut-être en danger.
-            Contactez immédiatement l'administrateur PneumoIA.
-          </p>
+          <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:14px;margin:16px 0">
+            <p style="margin:0;color:#92400e;font-weight:bold">Pour rétablir votre accès :</p>
+            <p style="margin:8px 0 0;color:#78350f">
+              Cliquez sur le bouton ci-dessous. L'administrateur sera notifié et pourra débloquer votre compte.
+            </p>
+            {btn}
+          </div>
           <p style="color:#9ca3af;font-size:12px;margin-top:16px">
-            L'administrateur a également été notifié de cette activité suspecte.
+            Si vous êtes à l'origine de ces tentatives, ignorez cet email.
+            L'administrateur a également été notifié de cette activité.
           </p>
         </div>
         """,
