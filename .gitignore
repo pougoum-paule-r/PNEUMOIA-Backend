@@ -22,3 +22,32 @@ build/
 Frontend/.vite/
 *.log
 .env.local
+
+
+
+
+# Environnement virtuel
+venv/
+.venv/
+
+# Secrets — JAMAIS sur GitHub
+.env
+.env.*
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Uploads utilisateurs
+uploads/
+
+# Logs
+*.log
+
+# Dataset / modèles ML lourds
+*.xlsx
+*.onnx
+*.pkl
+*.h5

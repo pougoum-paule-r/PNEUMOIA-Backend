@@ -49,3 +49,12 @@ pillow>=10.0.0                     # redimensionnement photos profil
 
 # ---------- Utilitaires ----------
 python-dotenv>=1.0.0               # chargement .env en local
+
+
+pour lancer maintenant le projet : 
+cd "F:\NIVEAU 3\Projet tutoré\PNEUMOIA (2)\PNEUMOIA"
+docker compose --env-file ./Backend/.env up -d
+
+
+pour arrêter maintenant le projet : 
+docker compose --env-file ./Backend/.env down
