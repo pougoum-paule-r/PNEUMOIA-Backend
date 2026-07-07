@@ -1,53 +1,36 @@
-# Claude Code config
-.claude/
+# ── Secrets — JAMAIS sur GitHub ───────────────────────────────────────────────
+.env
+.env.*
+.env.local
 
-# Python / Backend
+# ── Environnement virtuel Python ──────────────────────────────────────────────
+venv/
+.venv/
+
+# ── Cache Python ──────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.env
-venv/
-.venv/
-*.pkl
-*.onnx
-*.pkl.part
-Backend/app/ml_models/
-uploads/
-
-# Frontend
-node_modules/
-dist/
-build/
-Frontend/.vite/
-*.log
-.env.local
-
-
-
-
-# Environnement virtuel
-venv/
-.venv/
-
-# Secrets — JAMAIS sur GitHub
-.env
-.env.*
-
-# Cache Python
-__pycache__/
-*.pyc
-*.pyo
 .pytest_cache/
 
-# Uploads utilisateurs
+# ── Uploads utilisateurs (données dynamiques, non versionnées) ────────────────
 uploads/
 
-# Logs
+# ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
 
-# Dataset / modèles ML lourds
+# ── Datasets lourds (fichiers d'entraînement, non nécessaires au build) ───────
 *.xlsx
-*.onnx
-*.pkl
 *.h5
+*.onnx
+
+# IMPORTANT : les fichiers .pkl (modèles ML) sont inclus dans le repo
+# car ils sont nécessaires au fonctionnement de l'application Docker.
+# Si leur taille dépasse 100 Mo, utiliser Git LFS.
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+.claude/
+
+.pkl
+.onnx

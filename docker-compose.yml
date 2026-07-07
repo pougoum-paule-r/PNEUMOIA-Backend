@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  PneumoIA — Docker Compose
+#  À lancer depuis le dossier Backend/ :
+#    docker compose --env-file .env up --build
+#
+#  Le repo frontend doit être cloné dans le dossier voisin.
+#  Par défaut le dossier s'appelle "Frontend" (cas local).
+#  Pour un autre nom :  FRONTEND_DIR=mon-frontend docker compose up --build
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: pneumoia   # force le même nom de projet quel que soit le dossier de lancement
+
+services:
+
+  # ── 1. Base de données PostgreSQL ─────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: pneumoia_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       pneumoia
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pneumoia"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── 2. Backend FastAPI ─────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .          # racine du repo backend
+      dockerfile: Dockerfile
+    container_name: pneumoia_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:                 postgresql+asyncpg://postgres:${DB_PASSWORD:-changeme}@db:5432/pneumoia
+      SECRET_KEY:                   ${SECRET_KEY}
+      ALGORITHM:                    ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES:  ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      SMTP_HOST:                    ${SMTP_HOST}
+      SMTP_PORT:                    ${SMTP_PORT:-587}
+      SMTP_USER:                    ${SMTP_USER}
+      SMTP_PASSWORD:                ${SMTP_PASSWORD}
+      FROM_EMAIL:                   ${FROM_EMAIL}
+      BREVO_API_KEY:                ${BREVO_API_KEY:-}
+      TWILIO_ACCOUNT_SID:           ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN:            ${TWILIO_AUTH_TOKEN}
+      TWILIO_PHONE_NUMBER:          ${TWILIO_PHONE_NUMBER}
+      FRONTEND_URL:                 ${FRONTEND_URL:-http://localhost}
+      BACKEND_URL:                  ${BACKEND_URL:-http://localhost:8000}
+      UPLOAD_DIR:                   /app/uploads
+      ADMIN_EMAIL:                  ${ADMIN_EMAIL}
+      ADMIN_PASSWORD:               ${ADMIN_PASSWORD}
+    volumes:
+      - uploads_data:/app/uploads
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env              # .env à la racine du repo backend
+
+  # ── 3. Frontend React (Nginx) ──────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../${FRONTEND_DIR:-Frontend}   # dossier frontend voisin (défaut: ../Frontend)
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api/v1}
+    container_name: pneumoia_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+# ── Volumes persistants ────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+  uploads_data:
