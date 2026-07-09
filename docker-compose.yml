@@ -70,7 +70,7 @@ services:
   # ── 3. Frontend React (Nginx) ──────────────────────────────────────────────
   frontend:
     build:
-      context: ../${FRONTEND_DIR:-Frontend}   # dossier frontend voisin (défaut: ../Frontend)
+      context: ../${FRONTEND_DIR:-PNEUMOIA-Frontend2026}   # dossier frontend voisin (défaut: ../PNEUMOIA-Frontend2026)
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api/v1}
