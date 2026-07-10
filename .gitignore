@@ -29,8 +29,6 @@ uploads/
 # car ils sont nécessaires au fonctionnement de l'application Docker.
 # Si leur taille dépasse 100 Mo, utiliser Git LFS.
 
-# ── Docker ────────────────────────────────────────────────────────────────────
-docker-compose.yml
 
 # ── Claude Code ───────────────────────────────────────────────────────────────
 .claude/
