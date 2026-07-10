@@ -1,30 +1,40 @@
 from pydantic_settings import BaseSettings
+from pathlib import Path
+
+# Chemin absolu vers le .env — fonctionne peu importe d'où tu lances uvicorn
+ENV_FILE = Path(__file__).parent.parent / ".env"
 
 class Settings(BaseSettings):
     DATABASE_URL: str
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
 
-    # ── Email SMTP (Brevo / SendGrid / Mailtrap) ──────────────
-    SMTP_HOST:     str = "smtp-relay.brevo.com"   # Brevo par défaut
+    # ── Email SMTP ────────────────────────────────────────────
+    SMTP_HOST:     str = "smtp-relay.brevo.com"
     SMTP_PORT:     int = 587
-    SMTP_USER:     str                             # ton email de connexion Brevo
-    SMTP_PASSWORD: str                             # clé SMTP générée par Brevo
-    FROM_EMAIL:    str                             # adresse expéditeur vérifiée
+    SMTP_USER:     str
+    SMTP_PASSWORD: str
+    FROM_EMAIL:    str
+    BREVO_API_KEY: str | None = None   # si défini → API HTTP (plus rapide que SMTP)
 
-    # ── SMS (Twilio) ──────────────────────────────────────────
+    # ── Twilio ────────────────────────────────────────────────
     TWILIO_ACCOUNT_SID:  str
     TWILIO_AUTH_TOKEN:   str
     TWILIO_PHONE_NUMBER: str
-    ADMIN_PHONE:         str
 
     # ── URLs ──────────────────────────────────────────────────
     FRONTEND_URL: str
     BACKEND_URL:  str = "http://localhost:8000"
     UPLOAD_DIR:   str = "./uploads"
 
+    # ── Admin initial (optionnel — seulement pour init_db) ───
+    ADMIN_EMAIL:    str | None = None
+    ADMIN_PASSWORD: str | None = None
+
+
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 settings = Settings()

@@ -1,17 +1,21 @@
 import sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-# ↑ Ajoute Backend/ au PYTHONPATH → Python trouve le module app/
 
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
 from app.database import Base
+from app.config import settings
 import app.models  # noqa: F401 — enregistre tous les modèles
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Utilise la même URL que l'app (depuis .env), avec le driver sync pour Alembic
+_db_url = settings.DATABASE_URL.replace("+asyncpg", "")
+config.set_main_option("sqlalchemy.url", _db_url)
 
 target_metadata = Base.metadata
 

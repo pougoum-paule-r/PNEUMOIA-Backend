@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, DateTime, Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
@@ -27,7 +27,7 @@ class MembreCommunaute(Base):
         nullable=False,
         default="accepte",
     )
-    joined_at     = Column(DateTime, nullable=False, default=datetime.utcnow)
+    joined_at     = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     __table_args__ = (
         UniqueConstraint("communaute_id", "medecin_id", name="uq_membre_communaute"),

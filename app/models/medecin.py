@@ -1,7 +1,8 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import Column, String, DateTime, Enum, Text, ForeignKey
+from sqlalchemy import Column, String, Boolean, DateTime, Enum, Text, ForeignKey
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -10,6 +11,11 @@ from app.database import Base
 def generate_pneu_id():
     chiffres = ''.join(random.choices(string.digits, k=7))
     return f"PNEU-{chiffres}"
+
+
+def generate_code_referent():
+    chars = string.ascii_uppercase + string.digits
+    return f"AS-{''.join(random.choices(chars, k=5))}"
 
 
 class Medecin(Base):
@@ -27,11 +33,12 @@ class Medecin(Base):
     photo_url     = Column(String(500), nullable=True)
     telephone     = Column(String(30),  nullable=True)
     adresse       = Column(String(300), nullable=True)
+    ville         = Column(String(100), nullable=True)
     bio           = Column(Text,        nullable=True)
     linkedin      = Column(String(300), nullable=True)
     website       = Column(String(300), nullable=True)
     statut        = Column(
-        Enum("en_attente", "valide", "rejete", "suspendu", name="statut_medecin"),
+        Enum("en_attente", "valide", "rejete", "suspendu", "corbeille", name="statut_medecin"),
         nullable=False,
         default="en_attente",
     )
@@ -40,11 +47,36 @@ class Medecin(Base):
     valide_le          = Column(DateTime,   nullable=True)
     activation_token   = Column(String(255), nullable=True)
     activation_expires = Column(DateTime,   nullable=True)
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
+    code_referent       = Column(String(10),  unique=True, nullable=True, default=generate_code_referent)
+    code_referent_actif = Column(Boolean,     nullable=False, default=True)
+    preferences         = Column(JSONB,       nullable=True,  server_default='{}')
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(DateTime, nullable=True,  onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
+    # ── Suspension ────────────────────────────────────────────────────
+    suspension_raison = Column(Text,        nullable=True)
+    suspension_duree  = Column(String(50),  nullable=True)
+    suspension_par    = Column(String(15),  ForeignKey("admins.id", ondelete="SET NULL"), nullable=True)
+    suspension_le     = Column(DateTime,    nullable=True)
+
+    # ── Refus ─────────────────────────────────────────────────────────
+    rejete_par = Column(String(15), ForeignKey("admins.id", ondelete="SET NULL"), nullable=True)
+
+    # ── Corbeille (soft delete) ──────────────────────────────────────
+    statut_precedent = Column(String(20),  nullable=True)
+    supprime_le      = Column(DateTime,    nullable=True)
+    supprime_par     = Column(String(15),  ForeignKey("admins.id", ondelete="SET NULL"), nullable=True)
+
+    # ── Relance après refus ──────────────────────────────────────────
+    relance_sent = Column(Boolean,  nullable=False, default=False)
+    relance_at   = Column(DateTime, nullable=True)
+
+    # ── Traçage d'activité ───────────────────────────────────────────
+    derniere_connexion = Column(DateTime, nullable=True)
 
     # Relations
     valideur           = relationship("Admin",            back_populates="medecins_valides", foreign_keys=[valide_par])
+    rejeteur            = relationship("Admin",           foreign_keys=[rejete_par])
     documents          = relationship("DocumentMedecin",  back_populates="medecin",    cascade="all, delete-orphan")
     patients_crees     = relationship("Patient",          back_populates="createur",   foreign_keys="Patient.created_by")
     consultations      = relationship("Consultation",     back_populates="medecin",    foreign_keys="Consultation.medecin_id")
@@ -57,6 +89,11 @@ class Medecin(Base):
     otp_codes          = relationship("OTPCode",          back_populates="medecin",    cascade="all, delete-orphan")
     audit_logs         = relationship("AuditLog",         back_populates="medecin")
     cas_cliniques      = relationship("CasCliniquPublic", back_populates="auteur")
+    aides_soignants    = relationship("AideSoignant",     back_populates="medecin", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Medecin {self.id} — {self.prenom} {self.nom} ({self.statut})>"
+    
+
+    ressources = relationship("RessourceMedicale", back_populates="medecin", cascade="all, delete-orphan")
+    questions  = relationship("QuestionMedecin",   back_populates="medecin", foreign_keys="QuestionMedecin.medecin_id")

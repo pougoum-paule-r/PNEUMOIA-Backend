@@ -149,6 +149,35 @@ ALERTES_GROUPE_SANGUIN = {
 }
 
 
+_NIVEAUX = {"critique": 3, "urgent": 2, "surveille": 1, "stable": 0}
+
+
+def _etat_depuis_seuils(etat_ml: str, symptomes: dict, body) -> str:
+    """Escalade l'état ML si les seuils cliniques objectifs l'exigent."""
+    spo2 = symptomes.get("saturation_o2")
+    temp = symptomes.get("temperature") or symptomes.get("fievre_temperature")
+    fc   = symptomes.get("frequence_cardiaque")
+    fr   = symptomes.get("frequence_respiratoire")
+
+    etat = etat_ml
+
+    # Critique : SpO2 < 90 OU fièvre ≥ 40 °C
+    if (spo2 and float(spo2) < 90) or (temp and float(temp) >= 40.0):
+        etat = "critique"
+    # Urgent : SpO2 < 94 OU fièvre ≥ 38.5 °C OU flag O2 anormal OU FC > 120 OU FR > 30
+    elif (
+        (spo2 and float(spo2) < 94)
+        or (temp and float(temp) >= 38.5)
+        or body.o2 == 1
+        or (fc and (float(fc) > 120 or float(fc) < 50))
+        or (fr and float(fr) > 30)
+    ):
+        if _NIVEAUX.get(etat, 0) < _NIVEAUX["urgent"]:
+            etat = "urgent"
+
+    return etat
+
+
 def _appliquer_alertes(body_religion, body_groupe_sanguin, prediction, probabilities, maladies, recommandations_principales):
     """Centralise la logique d'alertes religion + groupe sanguin."""
     alertes = []
@@ -243,33 +272,72 @@ def _choisir_modele(body):
     return nb_efr >= 2
 
 
-def _criteres_reels(body) -> list[str]:
-    """Retourne uniquement les critères cliniques validés par les données du patient."""
+def _criteres_depuis_symptomes(symptomes: dict, body) -> list[str]:
+    """
+    Génère les critères validés à partir :
+      - des paramètres structurés du modèle (body)
+      - des symptômes cliniques réels saisis par le médecin (symptomes, JSONB BDD)
+    Conforme à l'architecture CDSS : critères = données patient, pas règles statiques.
+    """
     criteres = []
+
+    # ── Données objectives / EFR / ABG ───────────────────────────────────────────
     if body.o2 == 1:
-        criteres.append("Hypoxémie (SpO₂ < 94%)")
+        criteres.append("Hypoxémie confirmée (SpO₂ < 94%)")
     if body.scan == 1:
-        criteres.append("Anomalie scanographique")
+        criteres.append("Scanner thoracique réalisé — anomalie détectée")
     if body.smoke == 1:
-        criteres.append("Tabagisme actif")
+        criteres.append("Tabagisme actif confirmé")
     if body.asthma == 1:
-        criteres.append("Antécédent d'asthme")
+        criteres.append("Antécédent d'asthme documenté")
     if body.pefr == 1:
-        criteres.append("Débit expiratoire anormal")
+        criteres.append("Débit expiratoire de pointe anormal")
     if body.fvc and body.fvc < 3.0:
-        criteres.append(f"Capacité vitale réduite (FVC = {body.fvc} L)")
-    if body.fec1 and body.fev1_fvc_ratio and body.fev1_fvc_ratio < 0.7:
-        criteres.append(f"Ratio VEMS/CVF < 0.70 ({body.fev1_fvc_ratio:.2f})")
+        criteres.append(f"Capacité vitale forcée réduite — FVC = {body.fvc} L")
+    if body.fev1_fvc_ratio and body.fev1_fvc_ratio < 0.7:
+        criteres.append(f"Obstruction bronchique — Ratio VEMS/CVF = {body.fev1_fvc_ratio:.2f}")
     if body.peak_flow and body.peak_flow < 200:
-        criteres.append(f"Peak Flow bas ({body.peak_flow} L/min)")
+        criteres.append(f"Débit de pointe bas — Peak Flow = {body.peak_flow} L/min")
     if body.abg_po2 == 1:
-        criteres.append("Hypoxémie gazeuse (ABG PO₂)")
+        criteres.append("Hypoxémie gazeuse — ABG PO₂ anormal")
     if body.abg_pco2 == 1:
-        criteres.append("Hypercapnie (ABG PCO₂)")
+        criteres.append("Hypercapnie — ABG PCO₂ anormal")
     if body.abg_ph == 1:
-        criteres.append("Trouble pH sanguin")
+        criteres.append("Trouble de l'équilibre acido-basique")
+
+    # ── Symptômes cliniques saisis par le médecin (BDD) ──────────────────────────
+    if symptomes.get("fievre"):
+        t = symptomes.get("fievre_temperature")
+        criteres.append(f"Fièvre documentée{f' — {t} °C' if t else ''}")
+    if symptomes.get("toux"):
+        toux_type = symptomes.get("toux_type", "")
+        criteres.append(f"Toux {'sèche' if toux_type == 'seche' else 'productive'} confirmée")
+    if symptomes.get("toux_sang") or symptomes.get("hemoptysie"):
+        criteres.append("Hémoptysie — signe d'alarme")
+    if symptomes.get("dyspnee"):
+        stade = symptomes.get("dyspnee_stade", 1)
+        criteres.append(f"Dyspnée stade {stade}/4")
+    if symptomes.get("douleur_thoracique"):
+        criteres.append("Douleur thoracique présente")
+    if symptomes.get("wheezing"):
+        criteres.append("Wheezing ausculté")
+    if symptomes.get("crepitants"):
+        criteres.append("Crépitants à l'auscultation")
+    if symptomes.get("sibilants"):
+        criteres.append("Sibilants à l'auscultation")
+    if symptomes.get("sueurs_nocturnes"):
+        criteres.append("Sueurs nocturnes")
+    if symptomes.get("perte_poids"):
+        criteres.append("Perte de poids involontaire")
+    spo2_mesuree = symptomes.get("saturation_o2")
+    if spo2_mesuree and float(spo2_mesuree) < 94:
+        criteres.append(f"SpO₂ mesurée à {spo2_mesuree} %")
+    temp_mesuree = symptomes.get("temperature")
+    if temp_mesuree and float(temp_mesuree) > 38.5:
+        criteres.append(f"Hyperthermie — T° = {temp_mesuree} °C")
+
     if not criteres:
-        criteres = ["Données cliniques insuffisantes — diagnostic basé sur profil démographique uniquement"]
+        criteres = ["Aucune donnée clinique saisie — résultat basé sur profil démographique uniquement"]
     return criteres
 
 
@@ -310,6 +378,10 @@ async def predict(
     else:
         features_dict = {
             'AGE': body.age, 'Gender': body.gender, 'smoke': body.smoke,
+            'FVC':            body.fvc          if body.fvc          is not None else 0,
+            'FEC1':           body.fec1         if body.fec1         is not None else 0,
+            'FEV1_FVC_Ratio': body.fev1_fvc_ratio if body.fev1_fvc_ratio is not None else 0,
+            'Peak_Flow':      body.peak_flow    if body.peak_flow    is not None else 0,
             'PEFR': body.pefr, 'O2': body.o2, 'Scan': body.scan,
             'Asthama': body.asthma, 'Other diseaes': body.other_diseases,
         }
@@ -407,8 +479,10 @@ async def predict_and_save(
 ):
     # 1. Vérifier le token
     try:
-        payload    = decode_token(credentials.credentials)
-        medecin_id = payload.get("sub")
+        payload = decode_token(credentials.credentials)
+        role    = payload.get("role", "medecin")
+        # Aide token: sub=aide_id, medecin_id=medecin lié
+        medecin_id = payload.get("medecin_id") if role == "aide_soignant" else payload.get("sub")
     except JWTError:
         raise HTTPException(401, "Token invalide")
 
@@ -417,6 +491,9 @@ async def predict_and_save(
     c = await db.get(Consultation, body.consultation_id)
     if not c or c.medecin_id != medecin_id:
         raise HTTPException(403, "Accès refusé")
+
+    # Symptômes réels saisis par le médecin (JSONB PostgreSQL)
+    symptomes_bdd = c.symptomes or {}
 
     if not model_base or not model_equipe:
         raise HTTPException(503, "Modèles IA non disponibles")
@@ -450,6 +527,10 @@ async def predict_and_save(
     else:
         features_dict = {
             'AGE': body.age, 'Gender': body.gender, 'smoke': body.smoke,
+            'FVC':            body.fvc          if body.fvc          is not None else 0,
+            'FEC1':           body.fec1         if body.fec1         is not None else 0,
+            'FEV1_FVC_Ratio': body.fev1_fvc_ratio if body.fev1_fvc_ratio is not None else 0,
+            'Peak_Flow':      body.peak_flow    if body.peak_flow    is not None else 0,
             'PEFR': body.pefr, 'O2': body.o2, 'Scan': body.scan,
             'Asthama': body.asthma, 'Other diseaes': body.other_diseases,
         }
@@ -470,7 +551,7 @@ async def predict_and_save(
             "etat":             "critique"  if probabilities[i] > 0.7 else
                                 "urgent"    if probabilities[i] > 0.5 else
                                 "surveille" if probabilities[i] > 0.3 else "stable",
-            "criteres_valides": _criteres_reels(body),          # ← dynamique
+            "criteres_valides": _criteres_depuis_symptomes(symptomes_bdd, body),
             "recommandations":  RECOMMANDATIONS.get(classes_list[i], []),
             "examens_suggeres": EXAMENS.get(classes_list[i], []),
         }
@@ -479,6 +560,9 @@ async def predict_and_save(
 
     etat_patient = maladies[0]["etat"] if maladies else "stable"
 
+    # Escalade par seuils cliniques objectifs (SpO2, température, FC, FR…)
+    etat_patient = _etat_depuis_seuils(etat_patient, symptomes_bdd, body)
+
     # 4. Alertes religion + groupe sanguin
     recommandations_principales = RECOMMANDATIONS.get(prediction, [])
     alertes, recommandations_principales = _appliquer_alertes(
@@ -486,17 +570,35 @@ async def predict_and_save(
         maladies, recommandations_principales
     )
 
-    # 5. Sauvegarder dans diagnostics_ia
+    # 5. Sauvegarder dans diagnostics_ia (upsert : mise à jour si déjà existant)
     from app.models.diagnostic_ia import DiagnosticIA
-    diag = DiagnosticIA(
-        consultation_id    = body.consultation_id,
-        maladies           = maladies,
-        recommandations    = recommandations_principales,
-        etat_patient       = etat_patient,
-        version_modele     = "equipe" if est_equipe else "base",
-        duree_inference_ms = 0,
+    from sqlalchemy import select as _select
+    existing = await db.execute(
+        _select(DiagnosticIA).where(DiagnosticIA.consultation_id == body.consultation_id)
     )
-    db.add(diag)
+    diag = existing.scalars().first()
+    if diag:
+        diag.maladies           = maladies
+        diag.recommandations    = recommandations_principales
+        diag.etat_patient       = etat_patient
+        diag.version_modele     = "equipe" if est_equipe else "base"
+        diag.duree_inference_ms = 0
+    else:
+        diag = DiagnosticIA(
+            consultation_id    = body.consultation_id,
+            maladies           = maladies,
+            recommandations    = recommandations_principales,
+            etat_patient       = etat_patient,
+            version_modele     = "equipe" if est_equipe else "base",
+            duree_inference_ms = 0,
+        )
+        db.add(diag)
+
+    # Propager immédiatement l'état clinique vers la consultation
+    # → visible dans cas-graves dès le diagnostic, sans attendre l'étape 4
+    if etat_patient in ("urgent", "critique", "surveille"):
+        c.statut_clinique = etat_patient
+
     await db.commit()
     await db.refresh(diag)
 

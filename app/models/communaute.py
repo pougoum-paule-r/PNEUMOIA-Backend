@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Text, Integer, DateTime, Enum, ForeignKey
 from sqlalchemy.orm import relationship
@@ -27,7 +27,7 @@ class Communaute(Base):
     createur_id = Column(String(15),  ForeignKey("medecins.id", ondelete="RESTRICT"), nullable=False)
     nb_membres  = Column(Integer,     nullable=False, default=1)
     nb_cas      = Column(Integer,     nullable=False, default=0)
-    created_at  = Column(DateTime,    nullable=False, default=datetime.utcnow)
+    created_at  = Column(DateTime,    nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relations
     createur     = relationship("Medecin",          back_populates="communautes_creees", foreign_keys=[createur_id])

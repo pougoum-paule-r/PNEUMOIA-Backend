@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Date, DateTime, Enum, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -49,9 +49,18 @@ class Patient(Base):
     # }
 
     # ── Méta ─────────────────────────────────────────────────────
-    created_by = Column(String(15), ForeignKey("medecins.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime,   nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime,   nullable=True,  onupdate=datetime.utcnow)
+    # created_by      = FK vers médecin (quand c'est le médecin qui crée)
+    # aide_id         = FK vers aide soignant (quand c'est l'aide qui crée ou gère le patient)
+    # created_by_aide = FK vers aide soignant qui a saisi le dossier (immuable)
+    created_by      = Column(String(15), ForeignKey("medecins.id",       ondelete="SET NULL"), nullable=True)
+    aide_id         = Column(String(15), ForeignKey("aides_soignants.id",ondelete="SET NULL"), nullable=True)
+    created_by_aide = Column(String(15), ForeignKey("aides_soignants.id",ondelete="SET NULL"), nullable=True)
+    created_at      = Column(DateTime,   nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at      = Column(DateTime,   nullable=True,  onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+    # ── Soft-delete ───────────────────────────────────────────────
+    deleted_at = Column(DateTime,   nullable=True, default=None)
+    deleted_by = Column(String(15), ForeignKey("medecins.id", ondelete="SET NULL"), nullable=True)
 
     # ── Relations ─────────────────────────────────────────────────
     createur      = relationship("Medecin",      back_populates="patients_crees", foreign_keys=[created_by])
@@ -60,3 +69,6 @@ class Patient(Base):
 
     def __repr__(self):
         return f"<Patient {self.id} — {self.civilite} {self.prenom} {self.nom}>"
+    
+        # def __hello__(self):
+        #     return f"Patient {self.id} — {self.civilite} {self.prenom} {self.nom}"

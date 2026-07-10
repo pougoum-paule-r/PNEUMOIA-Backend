@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Integer, DateTime, Enum, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
@@ -32,7 +32,7 @@ class DiagnosticIA(Base):
     )
     version_modele     = Column(String(20), nullable=True)   # ex : "v1.2.0"
     duree_inference_ms = Column(Integer,    nullable=True)
-    created_at         = Column(DateTime,   nullable=False, default=datetime.utcnow)
+    created_at         = Column(DateTime,   nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # Relations
     consultation = relationship("Consultation", back_populates="diagnostic")

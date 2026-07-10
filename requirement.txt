@@ -17,6 +17,7 @@ psycopg2-binary>=2.9.9         # driver PostgreSQL sync (migrations Alembic)
 # ---------- Validation & Sérialisation ----------
 pydantic>=2.7.0
 pydantic-settings>=2.2.0       # lecture du .env
+email-validator>=2.0.0         # validation EmailStr (pydantic)
 
 # ---------- Sécurité & Auth ----------
 python-jose[cryptography]>=3.3.0   # JWT (HS256)
@@ -24,7 +25,8 @@ passlib[bcrypt]>=1.7.4             # hash passwords bcrypt
 pyotp>=2.9.0                       # génération OTP 6 chiffres
 
 # ---------- Email & SMS ----------
-# Email : envoi SMTP natif Python (smtplib) — compatible Brevo, SendGrid, Mailtrap
+aiosmtplib>=3.0.0                  # envoi SMTP async (Gmail, Brevo relay, Mailtrap…)
+httpx>=0.27.0                      # client HTTP async
 twilio>=9.0.0                      # SMS (Twilio)
 
 # ---------- Tâches asynchrones ----------
@@ -38,7 +40,7 @@ boto3>=1.34.0                      # AWS S3
 weasyprint>=62.0                   # PDF bilans de consultation
 
 # ---------- Intelligence Artificielle ----------
-scikit-learn>=1.5.0                # modèle de classification
+scikit-learn==1.8.0                # modèle de classification (version figée — doit matcher celle utilisée pour entraîner le .pkl)
 joblib>=1.4.0                      # sérialisation/désérialisation modèle (.pkl)
 shap>=0.45.0                       # explication des prédictions (SHAP values)
 pandas>=2.2.0                      # manipulation des données
@@ -47,3 +49,12 @@ pillow>=10.0.0                     # redimensionnement photos profil
 
 # ---------- Utilitaires ----------
 python-dotenv>=1.0.0               # chargement .env en local
+
+
+pour lancer maintenant le projet : 
+cd "F:\NIVEAU 3\Projet tutoré\PNEUMOIA (2)\PNEUMOIA"
+docker compose --env-file ./Backend/.env up -d
+
+
+pour arrêter maintenant le projet : 
+docker compose --env-file ./Backend/.env down

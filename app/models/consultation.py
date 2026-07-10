@@ -1,5 +1,5 @@
 ﻿import random, string
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Text, DateTime, Enum, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
@@ -39,13 +39,18 @@ class Consultation(Base):
     #   fvc, fec1, peak_flow, pefr_anormal, abg_co2_anormal, abg_ph_anormal
     # }
 
-    # ── STATUT ────────────────────────────────────────────────────────
-    # en_attente = diagnostic IA fait mais médecin n'a pas encore donné son avis
-    # terminee   = médecin a validé + prescription faite
+    # ── STATUTS ───────────────────────────────────────────────────────
+    # statut          : avis médecin  → en_attente / terminee
+    # statut_clinique : état patient  → stable / surveille / urgent / critique
     statut = Column(
         Enum("en_attente", "terminee", name="statut_consultation"),
         nullable=False,
         default="en_attente",
+    )
+    statut_clinique = Column(
+        Enum("stable", "surveille", "urgent", "critique", name="statut_clinique_enum"),
+        nullable=True,
+        default=None,
     )
 
     # ── ÉTAPE 4 — Avis médecin (optionnel — si absent = en_attente) ───
@@ -76,8 +81,8 @@ class Consultation(Base):
     # }
 
     # ── MÉTA ──────────────────────────────────────────────────────────
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=True,  onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(DateTime, nullable=True,  onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # ── RELATIONS ─────────────────────────────────────────────────────
     patient      = relationship("Patient",      back_populates="consultations")

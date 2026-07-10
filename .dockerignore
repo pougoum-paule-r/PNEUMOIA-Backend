@@ -1,0 +1,25 @@
+# Environnement virtuel Python — Docker réinstalle depuis requirements.txt
+venv/
+.venv/
+
+# Fichiers secrets — injectés via docker-compose, pas embarqués dans l'image
+.env
+.env.*
+
+# Uploads utilisateurs — montés en volume Docker, pas dans l'image
+uploads/
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Outils de développement
+.git/
+.gitignore
+*.md
+
+# Logs
+*.log
