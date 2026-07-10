@@ -37,18 +37,21 @@ async def _send_via_api(to_email: str, subject: str, html: str) -> None:
 def _smtp_send_sync(to_email: str, subject: str, html: str) -> None:
     """Envoi SMTP synchrone — appelé via asyncio.to_thread."""
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = settings.FROM_EMAIL
-    msg["To"]      = to_email
+    msg["Subject"]                  = subject
+    msg["From"]                     = f"PneumoIA <{settings.FROM_EMAIL}>"
+    msg["To"]                       = to_email
+    msg["X-Mailer"]                 = "PneumoIA/1.0"
+    msg["X-Priority"]               = "1"
+    msg["Importance"]               = "high"
     msg.attach(MIMEText(html, "html"))
 
     ctx = ssl.create_default_context()
     if settings.SMTP_PORT == 465:
-        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15, context=ctx) as server:
+        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=25, context=ctx) as server:
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.sendmail(settings.FROM_EMAIL, to_email, msg.as_string())
     else:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=25) as server:
             server.ehlo()
             server.starttls(context=ctx)
             server.ehlo()

@@ -38,6 +38,9 @@ services:
       dockerfile: Dockerfile
     container_name: pneumoia_backend
     restart: unless-stopped
+    dns:
+      - 8.8.8.8           # DNS Google — nécessaire pour smtp.gmail.com, Twilio, etc.
+      - 8.8.4.4
     depends_on:
       db:
         condition: service_healthy
