@@ -303,10 +303,14 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     _logger = _logging.getLogger(__name__)
     email_sent = True
     try:
-        await asyncio.wait_for(send_otp_email(medecin.email, medecin.nom, otp), timeout=6.0)
+        await asyncio.wait_for(send_otp_email(medecin.email, medecin.nom, otp), timeout=30.0)
+    except asyncio.TimeoutError:
+        email_sent = False
+        _logger.warning("Email OTP timeout (>30s) — CODE CONSOLE: %s", otp)
+        print(f"\n{'='*50}\n[OTP LOGIN] {medecin.email} → code: {otp}\n{'='*50}\n", flush=True)
     except Exception as e:
         email_sent = False
-        _logger.warning("Email OTP non envoyé (%s) — CODE CONSOLE: %s", e, otp)
+        _logger.warning("Email OTP non envoyé (%s: %s) — CODE CONSOLE: %s", type(e).__name__, e, otp)
         print(f"\n{'='*50}\n[OTP LOGIN] {medecin.email} → code: {otp}\n{'='*50}\n", flush=True)
 
     return {
@@ -695,10 +699,14 @@ async def forgot_password(body: ForgotPasswordRequest, db: AsyncSession = Depend
     _logger = _logging.getLogger(__name__)
     email_sent = True
     try:
-        await asyncio.wait_for(send_reset_otp_email(medecin.email, medecin.nom, otp), timeout=6.0)
+        await asyncio.wait_for(send_reset_otp_email(medecin.email, medecin.nom, otp), timeout=30.0)
+    except asyncio.TimeoutError:
+        email_sent = False
+        _logger.warning("Email reset OTP timeout (>30s) — CODE CONSOLE: %s", otp)
+        print(f"\n{'='*50}\n[OTP RESET] {medecin.email} → code: {otp}\n{'='*50}\n", flush=True)
     except Exception as e:
         email_sent = False
-        _logger.warning("Email reset OTP non envoyé (%s) — CODE CONSOLE: %s", e, otp)
+        _logger.warning("Email reset OTP non envoyé (%s: %s) — CODE CONSOLE: %s", type(e).__name__, e, otp)
         print(f"\n{'='*50}\n[OTP RESET] {medecin.email} → code: {otp}\n{'='*50}\n", flush=True)
 
     return {
