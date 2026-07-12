@@ -298,6 +298,21 @@ class AdminService:
         candidates = [d for d in [derniere_consultation, m.derniere_connexion] if d]
         derniere_activite = max(candidates).isoformat() if candidates else None
 
+        # Statut effectif calculé côté serveur
+        now = datetime.utcnow()
+        if m.statut != "valide":
+            _smap = {"suspendu": "Suspendu", "en_attente": "En attente", "rejete": "Rejeté", "corbeille": "Corbeille"}
+            statut_effectif = _smap.get(m.statut, m.statut)
+        else:
+            # ref = max(derniere_activite, valide_le) — la date la plus récente des deux
+            # Ainsi, un compte validé aujourd'hui est "Actif" même si une ancienne connexion existait
+            ref_candidates = [d for d in [max(candidates) if candidates else None, m.valide_le] if d]
+            ref = max(ref_candidates) if ref_candidates else None
+            if ref is None:
+                statut_effectif = "Actif"
+            else:
+                statut_effectif = "Inactif" if (now - ref).days > 14 else "Actif"
+
         # Cas cliniques publiés
         nb_cas = len(cas_cliniques)
 
@@ -321,7 +336,7 @@ class AdminService:
             "id": m.id, "civilite": m.civilite, "nom": m.nom, "prenom": m.prenom,
             "email": m.email, "telephone": m.telephone, "specialite": m.specialite,
             "numero_rpps": m.numero_rpps, "etablissement": m.etablissement, "adresse": m.adresse,
-            "photo_url": build_url(m.photo_url), "statut": m.statut,
+            "photo_url": build_url(m.photo_url), "statut": m.statut, "statut_effectif": statut_effectif,
             "created_at": m.created_at.isoformat() if m.created_at else None,
             "valide_le":  m.valide_le.isoformat()  if m.valide_le  else None,
             "valide_par": m.valideur.email           if m.valideur   else None,
@@ -1396,6 +1411,17 @@ class AdminService:
 
         # Mapping ville → région pour le Cameroun
         VILLE_REGION: dict[str, str] = {
+            # Noms de régions directement (si l'adresse est la région elle-même)
+            "Littoral": "Littoral",
+            "Centre": "Centre",
+            "Ouest": "Ouest",
+            "Nord": "Nord",
+            "Est": "Est",
+            "Sud": "Sud",
+            "Adamaoua": "Adamaoua",
+            "Extrême-Nord": "Extrême-Nord", "Extreme-Nord": "Extrême-Nord", "Extrême Nord": "Extrême-Nord",
+            "Nord-Ouest": "Nord-Ouest", "North West": "Nord-Ouest", "NW": "Nord-Ouest",
+            "Sud-Ouest": "Sud-Ouest", "South West": "Sud-Ouest", "SW": "Sud-Ouest",
             # Littoral
             "Douala": "Littoral", "Nkongsamba": "Littoral", "Edéa": "Littoral",
             "Loum": "Littoral", "Mbanga": "Littoral",
