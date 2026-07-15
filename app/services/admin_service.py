@@ -513,10 +513,7 @@ class AdminService:
             details={"medecin_nom": f"{medecin.prenom} {medecin.nom}", "email": medecin.email})
 
         return {
-            "message":        "Médecin validé avec succès.",
-            "email_envoye":   email_envoye,
-            "email_medecin":  medecin.email,
-            "lien_activation": lien,
+            "message": "Médecin validé avec succès.",
         }
 
     # ─────────────────────────────────────────────────────────────────────────

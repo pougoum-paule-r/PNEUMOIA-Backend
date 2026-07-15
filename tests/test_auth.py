@@ -6,7 +6,7 @@ import pytest
 
 pytestmark = pytest.mark.anyio
 
-ADMIN_PHONE = "+237656544163"
+ADMIN_PHONE = "+237656616801"
 
 
 async def test_admin_login_succes(client):

@@ -95,11 +95,14 @@ async def reset_request(
     Valide 10 minutes.
     POST /api/admin/auth/reset-request
     """
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
     otp = await AdminService.request_password_reset(db, body.email, body.phone)
     try:
         await AdminService.send_otp_sms(otp, body.phone)
     except Exception as e:
-        raise HTTPException(503, f"Échec envoi SMS : {str(e)}")
+        _logger.error("Échec envoi SMS OTP admin — %s: %s", type(e).__name__, e)
+        raise HTTPException(503, "L'envoi du code par SMS a échoué. Vérifiez votre connexion réseau et réessayez.")
     return {"message": "Code OTP envoyé par SMS. Valide 10 minutes."}
 
 
