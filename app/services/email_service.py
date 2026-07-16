@@ -7,14 +7,27 @@ from email.mime.text      import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 import httpx
+import resend as resend_client
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-async def _send_via_api(to_email: str, subject: str, html: str) -> None:
-    """Brevo HTTP API — async natif, pas de getaddrinfo thread issue."""
+async def _send_via_resend(to_email: str, subject: str, html: str) -> None:
+    """Resend API — envoie à n'importe quelle adresse, aucune liste de contacts requise."""
+    resend_client.api_key = settings.RESEND_API_KEY
+    params = {
+        "from":    f"PneumoIA <{settings.FROM_EMAIL}>",
+        "to":      [to_email],
+        "subject": subject,
+        "html":    html,
+    }
+    await asyncio.to_thread(resend_client.Emails.send, params)
+
+
+async def _send_via_brevo(to_email: str, subject: str, html: str) -> None:
+    """Brevo HTTP API — fallback si pas de clé Resend."""
     payload = {
         "sender":      {"name": "PneumoIA", "email": settings.FROM_EMAIL},
         "to":          [{"email": to_email}],
@@ -64,10 +77,12 @@ async def _send_via_smtp(to_email: str, subject: str, html: str) -> None:
 
 
 async def _send(to_email: str, subject: str, html: str) -> None:
-    if settings.BREVO_API_KEY:
-        await _send_via_api(to_email, subject, html)
+    if settings.RESEND_API_KEY:
+        await _send_via_resend(to_email, subject, html)   # priorité 1 — fonctionne sur tout hébergeur
+    elif settings.BREVO_API_KEY:
+        await _send_via_brevo(to_email, subject, html)    # priorité 2 — Brevo (liste contacts requise)
     else:
-        await _send_via_smtp(to_email, subject, html)
+        await _send_via_smtp(to_email, subject, html)     # priorité 3 — SMTP Gmail (local uniquement)
 
 
 # ─── Email de validation du compte ───────────────────────────────────────────
