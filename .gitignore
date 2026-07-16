@@ -35,3 +35,6 @@ uploads/
 
 .pkl
 .onnx
+
+# ── Diagrammes de classes (fichiers de travail, non nécessaires au build) ─────
+*.drawio
