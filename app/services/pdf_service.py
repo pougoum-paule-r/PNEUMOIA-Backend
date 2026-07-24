@@ -1,13 +1,22 @@
 # app/services/pdf_service.py
-"""Génère le bilan PDF d'une consultation avec ReportLab (pure Python, Windows compatible)."""
+# noqa: generated PDF service
 from __future__ import annotations
 import io
 import os
 from datetime import datetime, date
 from typing import TYPE_CHECKING
 
-_FONT_REGULAR = "Helvetica"
-_FONT_BOLD    = "Helvetica-Bold"
+# Polices Vera TrueType (incluses dans ReportLab) — support Unicode complet
+import reportlab as _rl_pkg
+from reportlab.pdfbase import pdfmetrics as _pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont as _TTFont
+_RL_FONTS = os.path.join(os.path.dirname(_rl_pkg.__file__), 'fonts')
+_pdfmetrics.registerFont(_TTFont('Vera',   os.path.join(_RL_FONTS, 'Vera.ttf')))
+_pdfmetrics.registerFont(_TTFont('VeraBd', os.path.join(_RL_FONTS, 'VeraBd.ttf')))
+_pdfmetrics.registerFont(_TTFont('VeraIt', os.path.join(_RL_FONTS, 'VeraIt.ttf')))
+
+_FONT_REGULAR = "Vera"
+_FONT_BOLD    = "VeraBd"
 
 if TYPE_CHECKING:
     from app.models.consultation import Consultation
@@ -28,25 +37,22 @@ GROUPES = {
     "AB+": "AB+", "AB-": "AB-", "O+": "O+", "O-": "O-",
 }
 
-
+# Caractères absents de Vera (subscripts, opérateurs mathématiques hors Latin-1)
 _SUBSCRIPT_MAP = str.maketrans({
     '₀': '0', '₁': '1', '₂': '2', '₃': '3',
     '₄': '4', '₅': '5', '₆': '6', '₇': '7',
     '₈': '8', '₉': '9',
     '²': '2', '³': '3',
-    '—': '-', '–': '-',   # em dash, en dash
-    '’': "'", '‘': "'",   # guillemets courbes
-    '“': '"', '”': '"',   # guillemets doubles courbes
-    '…': '...',                 # ellipsis
-    '°': '&#176;',             # degré
+    '≥': '>=', '≤': '<=', '≠': '!=',
+    '→': '->', '←': '<-', '↑': '^', '↓': 'v',
+    '×': 'x', '÷': '/',
+    '±': '+/-',
+    '…': '...',
 })
 
 def _clean(s: str) -> str:
-    """Prépare le texte pour ReportLab/Helvetica : encode les accents en entités XML."""
-    text = str(s).translate(_SUBSCRIPT_MAP)
-    # Encode les caractères non-ASCII en entités XML numériques (&#233; pour é, etc.)
-    # ReportLab Paragraph supporte ces entités nativement avec toutes les polices
-    return text.encode('ascii', 'xmlcharrefreplace').decode('ascii')
+    """Remplace les symboles hors-Vera (subscripts, opérateurs math) par leurs équivalents ASCII."""
+    return str(s).translate(_SUBSCRIPT_MAP)
 
 
 def _age(dob) -> str:
@@ -184,7 +190,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
             ("RIGHTPADDING", (0,0), (-1,-1), 12),
             ("ROUNDEDCORNERS", [4]),
         ]))
-        sub_t = Table([[Paragraph(
+        sub_t = Table([[P(
             f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}  ·  Consultation #{consultation.id}"
             f"  ·  Patient ID : {patient.id}",
             S_HDR_SUB)]], colWidths=[W])
@@ -249,12 +255,12 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
             etat_bg    = {"critique": C_RED_BG, "urgent": C_RED_BG, "surveille": colors.HexColor("#fffbeb")}.get(etat, C_GREEN_BG)
 
             diag_rows = [
-                [Paragraph("Pathologie principale", S_LBL), P(principale.get("nom","-"), S_VAL_BLUE)],
-                [Paragraph("État clinique",          S_LBL), Paragraph(etat_label, etat_style)],
+                [P("Pathologie principale", S_LBL), P(principale.get("nom","-"), S_VAL_BLUE)],
+                [P("État clinique",          S_LBL), P(etat_label, etat_style)],
             ]
             if len(maladies) > 1:
                 diff_txt = " · ".join(m['nom'] for m in maladies[1:4])
-                diag_rows.append([Paragraph("Diagnostics différentiels", S_LBL), P(diff_txt, S_VAL)])
+                diag_rows.append([P("Diagnostics différentiels", S_LBL), P(diff_txt, S_VAL)])
 
             diag_t = Table(diag_rows, colWidths=[W*0.36, W*0.64])
             diag_ts = TableStyle([
@@ -273,16 +279,16 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
             diag_t.setStyle(diag_ts)
             story.append(diag_t)
         else:
-            story.append(Paragraph("Diagnostic non encore disponible pour cette consultation.", S_VAL))
+            story.append(P("Diagnostic non encore disponible pour cette consultation.", S_VAL))
 
         story.append(Spacer(1, 14))
 
         # ── CRITÈRES ──────────────────────────────────────────────
         criteres = principale.get("criteres_valides", [])
         if criteres:
-            story.append(Paragraph("Critères cliniques validés", S_SEC))
+            story.append(P("Critères cliniques validés", S_SEC))
             story.append(Spacer(1, 4))
-            crit_rows = [[P(f"[+]  {_clean(c)}", S_BULLET)] for c in criteres]
+            crit_rows = [[P(f"[+]  {c}", S_BULLET)] for c in criteres]
             crit_t = Table(crit_rows, colWidths=[W])
             crit_t.setStyle(TableStyle([
                 ("GRID",         (0,0), (-1,-1), 0.5, C_GRAY_BDR),
@@ -297,7 +303,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         # ── EXAMENS ───────────────────────────────────────────────
         examens = principale.get("examens_suggeres", [])
         if examens:
-            story.append(Paragraph("Examens recommandés", S_SEC))
+            story.append(P("Examens recommandés", S_SEC))
             story.append(Spacer(1, 4))
             exam_rows = [[P(f"->  {e}", S_BULLET)] for e in examens]
             exam_t = Table(exam_rows, colWidths=[W])
@@ -314,9 +320,9 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         # ── RECOMMANDATIONS ───────────────────────────────────────
         recommandations = (diag.recommandations if diag else None) or principale.get("recommandations", [])
         if recommandations:
-            story.append(Paragraph("Recommandations médicales", S_SEC))
+            story.append(P("Recommandations médicales", S_SEC))
             story.append(Spacer(1, 4))
-            reco_rows = [[P(f"[+]  {_clean(r)}", S_BULLET)] for r in recommandations]
+            reco_rows = [[P(f"[+]  {r}", S_BULLET)] for r in recommandations]
             reco_t = Table(reco_rows, colWidths=[W])
             reco_t.setStyle(TableStyle([
                 ("GRID",          (0,0), (-1,-1), 0.5, colors.HexColor("#bfdbfe")),
@@ -330,7 +336,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
             story.append(Spacer(1, 14))
 
         # ── PRESCRIPTION ──────────────────────────────────────────
-        story.append(Paragraph("Prescription médicale", S_SEC))
+        story.append(P("Prescription médicale", S_SEC))
         story.append(Spacer(1, 4))
         arret = f"Oui — {prescriptions.get('duree_arret','?')} jours" if prescriptions.get("arret_travail") else "Non"
         hospi = f"Oui — {prescriptions.get('motif_hospitalisation','')}" if prescriptions.get("hospitalisation") else "Non"
@@ -347,7 +353,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
 
         # ── OBSERVATIONS ──────────────────────────────────────────
         if consultation.observations:
-            story.append(Paragraph("Observations du médecin", S_SEC))
+            story.append(P("Observations du médecin", S_SEC))
             story.append(Spacer(1, 4))
             obs_t = Table([[P(consultation.observations, S_OBS)]], colWidths=[W])
             obs_t.setStyle(TableStyle([
@@ -363,7 +369,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
 
         # ── PIED DE PAGE ──────────────────────────────────────────
         story.append(HRFlowable(width="100%", thickness=0.5, color=C_GRAY_BDR, spaceAfter=6))
-        story.append(Paragraph(
+        story.append(P(
             "Document généré par <b>PneumoIA</b> — Plateforme de suivi pneumologique<br/>"
             "Ce document est confidentiel et destiné exclusivement au patient et à son équipe médicale.",
             S_FOOTER))
@@ -429,7 +435,7 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
         S_ALERT_VAL = ps("av2", fontName=_FONT_REGULAR, fontSize=9, textColor=C_RED, leading=13)
 
         def P2(text, style):
-            return P2(_clean(str(text) if text is not None else ''), style)
+            return Paragraph(_clean(str(text) if text is not None else ''), style)
 
         def row(label, value):
             return [P2(label, S_LBL), P2(str(value) if value else "Aucun", S_VAL)]
@@ -563,7 +569,7 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
             if criteres:
                 story.append(P2("Critères cliniques validés", S_SEC))
                 story.append(Spacer(1, 4))
-                crit_rows = [[P2(f"[+]  {_clean(cr)}", S_BULLET)] for cr in criteres]
+                crit_rows = [[P2(f"[+]  {cr}", S_BULLET)] for cr in criteres]
                 crit_t = Table(crit_rows, colWidths=[W])
                 crit_t.setStyle(TableStyle([
                     ("GRID",(0,0),(-1,-1),0.5,C_GRAY_BDR),
@@ -597,7 +603,7 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
             if recommandations:
                 story.append(P2("Recommandations médicales", S_SEC))
                 story.append(Spacer(1, 4))
-                reco_rows = [[P2(f"[+]  {_clean(r)}", S_BULLET)] for r in recommandations]
+                reco_rows = [[P2(f"[+]  {r}", S_BULLET)] for r in recommandations]
                 reco_t = Table(reco_rows, colWidths=[W])
                 reco_t.setStyle(TableStyle([
                     ("GRID",(0,0),(-1,-1),0.5,colors.HexColor("#bfdbfe")),
