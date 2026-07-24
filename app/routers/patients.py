@@ -89,6 +89,85 @@ async def mes_patients(
     return result.scalars().all()
 
 
+# ── GET /patients/alertes-dashboard — Alertes pour la card carousel ─
+@router.get("/alertes-dashboard")
+async def alertes_dashboard(
+    db: AsyncSession = Depends(get_db),
+    medecin=Depends(get_current_medecin),
+):
+    from datetime import date
+    from app.models.aide_soignant import AideSoignant
+    from app.models.consultation import Consultation
+    from sqlalchemy.orm import selectinload
+
+    # 1. Patients créés par les aides-soignants de ce médecin
+    aides_res = await db.execute(
+        select(AideSoignant.id).where(AideSoignant.medecin_id == medecin.id)
+    )
+    aide_ids = [r[0] for r in aides_res.all()]
+
+    par_aide = []
+    if aide_ids:
+        res = await db.execute(
+            select(Patient)
+            .where(
+                Patient.created_by_aide.in_(aide_ids),
+                Patient.deleted_at.is_(None),
+            )
+            .order_by(Patient.created_at.desc())
+            .limit(30)
+        )
+        for p in res.scalars().all():
+            age = None
+            if p.date_naissance:
+                today = date.today()
+                age = today.year - p.date_naissance.year - (
+                    (today.month, today.day) < (p.date_naissance.month, p.date_naissance.day)
+                )
+            par_aide.append({
+                "id":         p.id,
+                "nom":        p.nom,
+                "prenom":     p.prenom,
+                "civilite":   p.civilite or "",
+                "age":        age,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            })
+
+    # 2. Consultations en attente d'avis médecin avec infos patient jointes
+    cons_res = await db.execute(
+        select(Consultation)
+        .options(selectinload(Consultation.patient))
+        .where(
+            Consultation.medecin_id == medecin.id,
+            Consultation.statut    == "en_attente",
+        )
+        .order_by(Consultation.created_at.desc())
+        .limit(30)
+    )
+    en_attente = []
+    for c in cons_res.scalars().all():
+        p = c.patient
+        if not p or p.deleted_at is not None:
+            continue
+        age = None
+        if p.date_naissance:
+            today = date.today()
+            age = today.year - p.date_naissance.year - (
+                (today.month, today.day) < (p.date_naissance.month, p.date_naissance.day)
+            )
+        en_attente.append({
+            "consultation_id": c.id,
+            "patient_id":      p.id,
+            "nom":             p.nom,
+            "prenom":          p.prenom,
+            "civilite":        p.civilite or "",
+            "age":             age,
+            "date":            c.created_at.isoformat() if c.created_at else None,
+        })
+
+    return {"par_aide": par_aide, "en_attente": en_attente}
+
+
 # ── GET /patients/recherche-par-code?code=XXX ────────────────────
 @router.get("/recherche-par-code")
 async def recherche_par_code(

@@ -2,8 +2,12 @@
 """Génère le bilan PDF d'une consultation avec ReportLab (pure Python, Windows compatible)."""
 from __future__ import annotations
 import io
+import os
 from datetime import datetime, date
 from typing import TYPE_CHECKING
+
+_FONT_REGULAR = "Helvetica"
+_FONT_BOLD    = "Helvetica-Bold"
 
 if TYPE_CHECKING:
     from app.models.consultation import Consultation
@@ -30,10 +34,19 @@ _SUBSCRIPT_MAP = str.maketrans({
     '₄': '4', '₅': '5', '₆': '6', '₇': '7',
     '₈': '8', '₉': '9',
     '²': '2', '³': '3',
+    '—': '-', '–': '-',   # em dash, en dash
+    '’': "'", '‘': "'",   # guillemets courbes
+    '“': '"', '”': '"',   # guillemets doubles courbes
+    '…': '...',                 # ellipsis
+    '°': '&#176;',             # degré
 })
 
 def _clean(s: str) -> str:
-    return str(s).translate(_SUBSCRIPT_MAP)
+    """Prépare le texte pour ReportLab/Helvetica : encode les accents en entités XML."""
+    text = str(s).translate(_SUBSCRIPT_MAP)
+    # Encode les caractères non-ASCII en entités XML numériques (&#233; pour é, etc.)
+    # ReportLab Paragraph supporte ces entités nativement avec toutes les polices
+    return text.encode('ascii', 'xmlcharrefreplace').decode('ascii')
 
 
 def _age(dob) -> str:
@@ -95,38 +108,42 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         def ps(name, **kw):
             return ParagraphStyle(name, **kw)
 
-        S_HDR_TITLE = ps("ht", fontName="Helvetica-Bold", fontSize=20,
+        S_HDR_TITLE = ps("ht", fontName=_FONT_BOLD, fontSize=20,
                           textColor=C_WHITE, alignment=TA_CENTER, leading=26)
-        S_HDR_SUB   = ps("hs", fontName="Helvetica", fontSize=9,
+        S_HDR_SUB   = ps("hs", fontName=_FONT_REGULAR, fontSize=9,
                           textColor=colors.HexColor("#bfdbfe"), alignment=TA_CENTER, leading=13)
-        S_SEC       = ps("sec", fontName="Helvetica-Bold", fontSize=11,
+        S_SEC       = ps("sec", fontName=_FONT_BOLD, fontSize=11,
                           textColor=C_BLUE, leading=14)
-        S_LBL       = ps("lbl", fontName="Helvetica-Bold", fontSize=9,
+        S_LBL       = ps("lbl", fontName=_FONT_BOLD, fontSize=9,
                           textColor=colors.HexColor("#334155"), leading=13)
-        S_VAL       = ps("val", fontName="Helvetica", fontSize=9,
+        S_VAL       = ps("val", fontName=_FONT_REGULAR, fontSize=9,
                           textColor=C_TEXT, leading=13)
-        S_VAL_BLUE  = ps("valb", fontName="Helvetica-Bold", fontSize=11,
+        S_VAL_BLUE  = ps("valb", fontName=_FONT_BOLD, fontSize=11,
                           textColor=C_BLUE_MID, leading=14)
-        S_BADGE_OK  = ps("bok", fontName="Helvetica-Bold", fontSize=9,
+        S_BADGE_OK  = ps("bok", fontName=_FONT_BOLD, fontSize=9,
                           textColor=C_GREEN, leading=13)
-        S_BADGE_WARN= ps("bwarn", fontName="Helvetica-Bold", fontSize=9,
+        S_BADGE_WARN= ps("bwarn", fontName=_FONT_BOLD, fontSize=9,
                           textColor=C_ORANGE, leading=13)
-        S_BADGE_ERR = ps("berr", fontName="Helvetica-Bold", fontSize=9,
+        S_BADGE_ERR = ps("berr", fontName=_FONT_BOLD, fontSize=9,
                           textColor=C_RED, leading=13)
-        S_ALERT_LBL = ps("al", fontName="Helvetica-Bold", fontSize=9,
+        S_ALERT_LBL = ps("al", fontName=_FONT_BOLD, fontSize=9,
                           textColor=C_RED, leading=13)
-        S_ALERT_VAL = ps("av", fontName="Helvetica", fontSize=9,
+        S_ALERT_VAL = ps("av", fontName=_FONT_REGULAR, fontSize=9,
                           textColor=C_RED, leading=13)
-        S_BULLET    = ps("blt", fontName="Helvetica", fontSize=9,
+        S_BULLET    = ps("blt", fontName=_FONT_REGULAR, fontSize=9,
                           textColor=C_TEXT, leading=14, leftIndent=4)
-        S_FOOTER    = ps("ft", fontName="Helvetica", fontSize=8,
+        S_FOOTER    = ps("ft", fontName=_FONT_REGULAR, fontSize=8,
                           textColor=C_MUTED, alignment=TA_CENTER, leading=12)
-        S_OBS       = ps("obs", fontName="Helvetica", fontSize=9,
+        S_OBS       = ps("obs", fontName=_FONT_REGULAR, fontSize=9,
                           textColor=C_TEXT, leading=14)
 
-        # ── Helper: table data row ─────────────────────────────────
+        # ── Helpers ───────────────────────────────────────────────
+        def P(text, style):
+            """Paragraph avec encodage XML automatique des accents français."""
+            return Paragraph(_clean(str(text) if text is not None else ''), style)
+
         def row(label, value, lbl_style=S_LBL, val_style=S_VAL):
-            return [Paragraph(label, lbl_style), Paragraph(str(value) if value else "Aucun", val_style)]
+            return [P(label, lbl_style), P(str(value) if value else "Aucun", val_style)]
 
         def section_table(data, col_w=(0.38, 0.62), style_extra=None):
             ts = TableStyle([
@@ -149,7 +166,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
 
         # ── HEADER BLOCK ─────────────────────────────────────────
         hdr_data = [[
-            Paragraph("PneumoIA — Bilan de Consultation", S_HDR_TITLE),
+            P("PneumoIA - Bilan de Consultation", S_HDR_TITLE),
         ]]
         sub_data = [[
             Paragraph(
@@ -158,7 +175,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
                 f"Dr. {getattr(consultation, 'medecin_nom', '')}",
                 S_HDR_SUB),
         ]]
-        hdr_t = Table([[Paragraph("PneumoIA — Bilan de Consultation", S_HDR_TITLE)]], colWidths=[W])
+        hdr_t = Table([[P("PneumoIA - Bilan de Consultation", S_HDR_TITLE)]], colWidths=[W])
         hdr_t.setStyle(TableStyle([
             ("BACKGROUND",   (0,0), (-1,-1), C_BLUE),
             ("TOPPADDING",   (0,0), (-1,-1), 14),
@@ -198,8 +215,8 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         ]
         if patient.religion == "temoin_jehovah":
             pat_rows.append([
-                Paragraph("[!] Alerte medicale", S_ALERT_LBL),
-                Paragraph("TEMOIN DE JEHOVAH - Refus formel de transfusion sanguine", S_ALERT_VAL),
+                P("[!] Alerte medicale", S_ALERT_LBL),
+                P("TEMOIN DE JEHOVAH - Refus formel de transfusion sanguine", S_ALERT_VAL),
             ])
 
         pat_t = Table(pat_rows, colWidths=[W*0.36, W*0.64])
@@ -232,12 +249,12 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
             etat_bg    = {"critique": C_RED_BG, "urgent": C_RED_BG, "surveille": colors.HexColor("#fffbeb")}.get(etat, C_GREEN_BG)
 
             diag_rows = [
-                [Paragraph("Pathologie principale", S_LBL), Paragraph(principale.get("nom","—"), S_VAL_BLUE)],
+                [Paragraph("Pathologie principale", S_LBL), P(principale.get("nom","-"), S_VAL_BLUE)],
                 [Paragraph("État clinique",          S_LBL), Paragraph(etat_label, etat_style)],
             ]
             if len(maladies) > 1:
                 diff_txt = " · ".join(m['nom'] for m in maladies[1:4])
-                diag_rows.append([Paragraph("Diagnostics différentiels", S_LBL), Paragraph(diff_txt, S_VAL)])
+                diag_rows.append([Paragraph("Diagnostics différentiels", S_LBL), P(diff_txt, S_VAL)])
 
             diag_t = Table(diag_rows, colWidths=[W*0.36, W*0.64])
             diag_ts = TableStyle([
@@ -265,7 +282,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         if criteres:
             story.append(Paragraph("Critères cliniques validés", S_SEC))
             story.append(Spacer(1, 4))
-            crit_rows = [[Paragraph(f"[+]  {_clean(c)}", S_BULLET)] for c in criteres]
+            crit_rows = [[P(f"[+]  {_clean(c)}", S_BULLET)] for c in criteres]
             crit_t = Table(crit_rows, colWidths=[W])
             crit_t.setStyle(TableStyle([
                 ("GRID",         (0,0), (-1,-1), 0.5, C_GRAY_BDR),
@@ -282,7 +299,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         if examens:
             story.append(Paragraph("Examens recommandés", S_SEC))
             story.append(Spacer(1, 4))
-            exam_rows = [[Paragraph(f"->  {e}", S_BULLET)] for e in examens]
+            exam_rows = [[P(f"->  {e}", S_BULLET)] for e in examens]
             exam_t = Table(exam_rows, colWidths=[W])
             exam_t.setStyle(TableStyle([
                 ("GRID",         (0,0), (-1,-1), 0.5, C_GRAY_BDR),
@@ -299,7 +316,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         if recommandations:
             story.append(Paragraph("Recommandations médicales", S_SEC))
             story.append(Spacer(1, 4))
-            reco_rows = [[Paragraph(f"[+]  {_clean(r)}", S_BULLET)] for r in recommandations]
+            reco_rows = [[P(f"[+]  {_clean(r)}", S_BULLET)] for r in recommandations]
             reco_t = Table(reco_rows, colWidths=[W])
             reco_t.setStyle(TableStyle([
                 ("GRID",          (0,0), (-1,-1), 0.5, colors.HexColor("#bfdbfe")),
@@ -332,7 +349,7 @@ async def generer_bilan_pdf(consultation: "Consultation", patient: "Patient", di
         if consultation.observations:
             story.append(Paragraph("Observations du médecin", S_SEC))
             story.append(Spacer(1, 4))
-            obs_t = Table([[Paragraph(consultation.observations, S_OBS)]], colWidths=[W])
+            obs_t = Table([[P(consultation.observations, S_OBS)]], colWidths=[W])
             obs_t.setStyle(TableStyle([
                 ("BOX",         (0,0), (-1,-1), 0.5, C_GRAY_BDR),
                 ("BACKGROUND",  (0,0), (-1,-1), C_GRAY_HDR),
@@ -395,24 +412,27 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
         C_WHITE      = colors.white
 
         def ps(name, **kw): return ParagraphStyle(name, **kw)
-        S_HDR_TITLE = ps("ht2", fontName="Helvetica-Bold", fontSize=18, textColor=C_WHITE, alignment=TA_CENTER, leading=24)
-        S_HDR_SUB   = ps("hs2", fontName="Helvetica", fontSize=9, textColor=colors.HexColor("#bfdbfe"), alignment=TA_CENTER, leading=13)
-        S_SEC       = ps("s2", fontName="Helvetica-Bold", fontSize=11, textColor=C_BLUE, leading=14)
-        S_SEC2      = ps("s22", fontName="Helvetica-Bold", fontSize=10, textColor=C_BLUE_MID, leading=13)
-        S_LBL       = ps("l2", fontName="Helvetica-Bold", fontSize=9, textColor=colors.HexColor("#334155"), leading=13)
-        S_VAL       = ps("v2", fontName="Helvetica", fontSize=9, textColor=C_TEXT, leading=13)
-        S_VAL_BLUE  = ps("vb2", fontName="Helvetica-Bold", fontSize=11, textColor=C_BLUE_MID, leading=14)
-        S_BADGE_OK  = ps("bok2", fontName="Helvetica-Bold", fontSize=9, textColor=C_GREEN, leading=13)
-        S_BADGE_WARN= ps("bw2", fontName="Helvetica-Bold", fontSize=9, textColor=C_ORANGE, leading=13)
-        S_BADGE_ERR = ps("be2", fontName="Helvetica-Bold", fontSize=9, textColor=C_RED, leading=13)
-        S_BULLET    = ps("blt2", fontName="Helvetica", fontSize=9, textColor=C_TEXT, leading=14, leftIndent=4)
-        S_FOOTER    = ps("ft2", fontName="Helvetica", fontSize=8, textColor=C_MUTED, alignment=TA_CENTER, leading=12)
-        S_OBS       = ps("ob2", fontName="Helvetica", fontSize=9, textColor=C_TEXT, leading=14)
-        S_ALERT_LBL = ps("al2", fontName="Helvetica-Bold", fontSize=9, textColor=C_RED, leading=13)
-        S_ALERT_VAL = ps("av2", fontName="Helvetica", fontSize=9, textColor=C_RED, leading=13)
+        S_HDR_TITLE = ps("ht2", fontName=_FONT_BOLD, fontSize=18, textColor=C_WHITE, alignment=TA_CENTER, leading=24)
+        S_HDR_SUB   = ps("hs2", fontName=_FONT_REGULAR, fontSize=9, textColor=colors.HexColor("#bfdbfe"), alignment=TA_CENTER, leading=13)
+        S_SEC       = ps("s2", fontName=_FONT_BOLD, fontSize=11, textColor=C_BLUE, leading=14)
+        S_SEC2      = ps("s22", fontName=_FONT_BOLD, fontSize=10, textColor=C_BLUE_MID, leading=13)
+        S_LBL       = ps("l2", fontName=_FONT_BOLD, fontSize=9, textColor=colors.HexColor("#334155"), leading=13)
+        S_VAL       = ps("v2", fontName=_FONT_REGULAR, fontSize=9, textColor=C_TEXT, leading=13)
+        S_VAL_BLUE  = ps("vb2", fontName=_FONT_BOLD, fontSize=11, textColor=C_BLUE_MID, leading=14)
+        S_BADGE_OK  = ps("bok2", fontName=_FONT_BOLD, fontSize=9, textColor=C_GREEN, leading=13)
+        S_BADGE_WARN= ps("bw2", fontName=_FONT_BOLD, fontSize=9, textColor=C_ORANGE, leading=13)
+        S_BADGE_ERR = ps("be2", fontName=_FONT_BOLD, fontSize=9, textColor=C_RED, leading=13)
+        S_BULLET    = ps("blt2", fontName=_FONT_REGULAR, fontSize=9, textColor=C_TEXT, leading=14, leftIndent=4)
+        S_FOOTER    = ps("ft2", fontName=_FONT_REGULAR, fontSize=8, textColor=C_MUTED, alignment=TA_CENTER, leading=12)
+        S_OBS       = ps("ob2", fontName=_FONT_REGULAR, fontSize=9, textColor=C_TEXT, leading=14)
+        S_ALERT_LBL = ps("al2", fontName=_FONT_BOLD, fontSize=9, textColor=C_RED, leading=13)
+        S_ALERT_VAL = ps("av2", fontName=_FONT_REGULAR, fontSize=9, textColor=C_RED, leading=13)
+
+        def P2(text, style):
+            return P2(_clean(str(text) if text is not None else ''), style)
 
         def row(label, value):
-            return [Paragraph(label, S_LBL), Paragraph(str(value) if value else "Aucun", S_VAL)]
+            return [P2(label, S_LBL), P2(str(value) if value else "Aucun", S_VAL)]
 
         def simple_table(data, col_w=(0.36, 0.64)):
             t = Table(data, colWidths=[W*col_w[0], W*col_w[1]])
@@ -432,7 +452,7 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
 
         # ── Page de garde ─────────────────────────────────────────
         religion_label = RELIGIONS.get(patient.religion or "", patient.religion or "Aucune")
-        hdr_t = Table([[Paragraph("PneumoIA — Dossier Patient Complet", S_HDR_TITLE)]], colWidths=[W])
+        hdr_t = Table([[P2("PneumoIA - Dossier Patient Complet", S_HDR_TITLE)]], colWidths=[W])
         hdr_t.setStyle(TableStyle([
             ("BACKGROUND",   (0,0),(-1,-1), C_BLUE),
             ("TOPPADDING",   (0,0),(-1,-1), 14),
@@ -440,7 +460,7 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
             ("LEFTPADDING",  (0,0),(-1,-1), 12),
             ("RIGHTPADDING", (0,0),(-1,-1), 12),
         ]))
-        sub_t = Table([[Paragraph(
+        sub_t = Table([[P2(
             f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} · {len(consultations_avec_diag)} consultation(s) · Patient ID : {patient.id}",
             S_HDR_SUB)]], colWidths=[W])
         sub_t.setStyle(TableStyle([
@@ -452,7 +472,7 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
         ]))
         story += [hdr_t, sub_t, Spacer(1, 14)]
 
-        story.append(Paragraph("Informations Patient", S_SEC))
+        story.append(P2("Informations Patient", S_SEC))
         story.append(Spacer(1, 4))
         pat_rows = [
             row("Nom complet",      f"{patient.civilite or ''} {patient.prenom} {patient.nom}".strip()),
@@ -464,8 +484,8 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
         ]
         if patient.religion == "temoin_jehovah":
             pat_rows.append([
-                Paragraph("[!] Alerte médicale", S_ALERT_LBL),
-                Paragraph("TÉMOIN DE JÉHOVAH — Refus transfusion sanguine", S_ALERT_VAL),
+                P2("[!] Alerte médicale", S_ALERT_LBL),
+                P2("TÉMOIN DE JÉHOVAH — Refus transfusion sanguine", S_ALERT_VAL),
             ])
         pat_t = Table(pat_rows, colWidths=[W*0.36, W*0.64])
         ts = TableStyle([
@@ -496,7 +516,7 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
             date_c     = c.created_at.strftime("%d/%m/%Y à %H:%M") if c.created_at else "—"
 
             # En-tête consultation
-            c_hdr = Table([[Paragraph(f"Consultation #{i+1} — {date_c}  [{statut_lbl}]", S_HDR_TITLE)]], colWidths=[W])
+            c_hdr = Table([[P2(f"Consultation #{i+1} - {date_c}  [{statut_lbl}]", S_HDR_TITLE)]], colWidths=[W])
             c_hdr.setStyle(TableStyle([
                 ("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#1e40af")),
                 ("TOPPADDING",(0,0),(-1,-1),10),
@@ -507,20 +527,20 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
             story += [c_hdr, Spacer(1, 12)]
 
             # Diagnostic
-            story.append(Paragraph("Diagnostic IA", S_SEC))
+            story.append(P2("Diagnostic IA", S_SEC))
             story.append(Spacer(1, 4))
             if principale:
                 etat = principale.get("etat", "stable")
                 etat_label = {"critique":"CRITIQUE","urgent":"URGENT","surveille":"SURVEILLÉ"}.get(etat,"STABLE")
                 etat_style = {"critique":S_BADGE_ERR,"urgent":S_BADGE_ERR,"surveille":S_BADGE_WARN}.get(etat,S_BADGE_OK)
                 diag_rows = [
-                    [Paragraph("Pathologie principale", S_LBL), Paragraph(principale.get("nom","—"), S_VAL_BLUE)],
-                    [Paragraph("Confiance IA",          S_LBL), Paragraph(f"{principale.get('pct', 0)}%", S_VAL)],
-                    [Paragraph("État clinique",          S_LBL), Paragraph(etat_label, etat_style)],
+                    [P2("Pathologie principale", S_LBL), P2(principale.get("nom","-"), S_VAL_BLUE)],
+                    [P2("Confiance IA",          S_LBL), P2(f"{principale.get('pct', 0)}%", S_VAL)],
+                    [P2("État clinique",          S_LBL), P2(etat_label, etat_style)],
                 ]
                 if len(maladies) > 1:
                     diff_txt = " · ".join(m.get('nom','') for m in maladies[1:4])
-                    diag_rows.append([Paragraph("Diagnostics différentiels", S_LBL), Paragraph(diff_txt, S_VAL)])
+                    diag_rows.append([P2("Diagnostics différentiels", S_LBL), P2(diff_txt, S_VAL)])
                 diag_t = Table(diag_rows, colWidths=[W*0.36, W*0.64])
                 diag_t.setStyle(TableStyle([
                     ("GRID",(0,0),(-1,-1),0.5,colors.HexColor("#bfdbfe")),
@@ -534,16 +554,16 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
                 ]))
                 story.append(diag_t)
             else:
-                story.append(Paragraph("Pas de diagnostic disponible pour cette consultation.", S_VAL))
+                story.append(P2("Pas de diagnostic disponible pour cette consultation.", S_VAL))
 
             story.append(Spacer(1, 10))
 
             # Critères cliniques validés
             criteres = principale.get("criteres_valides", []) if principale else []
             if criteres:
-                story.append(Paragraph("Critères cliniques validés", S_SEC))
+                story.append(P2("Critères cliniques validés", S_SEC))
                 story.append(Spacer(1, 4))
-                crit_rows = [[Paragraph(f"[+]  {_clean(cr)}", S_BULLET)] for cr in criteres]
+                crit_rows = [[P2(f"[+]  {_clean(cr)}", S_BULLET)] for cr in criteres]
                 crit_t = Table(crit_rows, colWidths=[W])
                 crit_t.setStyle(TableStyle([
                     ("GRID",(0,0),(-1,-1),0.5,C_GRAY_BDR),
@@ -558,9 +578,9 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
             # Examens recommandés
             examens = principale.get("examens_suggeres", []) if principale else []
             if examens:
-                story.append(Paragraph("Examens recommandés", S_SEC))
+                story.append(P2("Examens recommandés", S_SEC))
                 story.append(Spacer(1, 4))
-                exam_rows = [[Paragraph(f"->  {e}", S_BULLET)] for e in examens]
+                exam_rows = [[P2(f"->  {e}", S_BULLET)] for e in examens]
                 exam_t = Table(exam_rows, colWidths=[W])
                 exam_t.setStyle(TableStyle([
                     ("GRID",(0,0),(-1,-1),0.5,C_GRAY_BDR),
@@ -575,9 +595,9 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
             # Recommandations médicales
             recommandations = (diag.recommandations if diag else None) or (principale.get("recommandations", []) if principale else [])
             if recommandations:
-                story.append(Paragraph("Recommandations médicales", S_SEC))
+                story.append(P2("Recommandations médicales", S_SEC))
                 story.append(Spacer(1, 4))
-                reco_rows = [[Paragraph(f"[+]  {_clean(r)}", S_BULLET)] for r in recommandations]
+                reco_rows = [[P2(f"[+]  {_clean(r)}", S_BULLET)] for r in recommandations]
                 reco_t = Table(reco_rows, colWidths=[W])
                 reco_t.setStyle(TableStyle([
                     ("GRID",(0,0),(-1,-1),0.5,colors.HexColor("#bfdbfe")),
@@ -592,7 +612,7 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
 
             # Prescription
             if any([presc.get("medicaments"), presc.get("conseils_maison"), presc.get("recommandations"), presc.get("suivi")]):
-                story.append(Paragraph("Prescription médicale", S_SEC))
+                story.append(P2("Prescription médicale", S_SEC))
                 story.append(Spacer(1, 4))
                 arret = f"Oui — {presc.get('duree_arret','?')} jours" if presc.get("arret_travail") else "Non"
                 hospi = f"Oui — {presc.get('motif_hospitalisation','')}" if presc.get("hospitalisation") else "Non"
@@ -609,9 +629,9 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
 
             # Observations
             if c.observations:
-                story.append(Paragraph("Observations du médecin", S_SEC))
+                story.append(P2("Observations du médecin", S_SEC))
                 story.append(Spacer(1, 4))
-                obs_t = Table([[Paragraph(c.observations, S_OBS)]], colWidths=[W])
+                obs_t = Table([[P2(c.observations, S_OBS)]], colWidths=[W])
                 obs_t.setStyle(TableStyle([
                     ("BOX",(0,0),(-1,-1),0.5,C_GRAY_BDR),
                     ("BACKGROUND",(0,0),(-1,-1),C_GRAY_HDR),
@@ -625,7 +645,7 @@ async def generer_dossier_pdf(consultations_avec_diag: list, patient) -> bytes:
         # Pied de page
         story.append(Spacer(1, 14))
         story.append(HRFlowable(width="100%", thickness=0.5, color=C_GRAY_BDR, spaceAfter=6))
-        story.append(Paragraph(
+        story.append(P2(
             "Document généré par <b>PneumoIA</b> — Plateforme de suivi pneumologique<br/>"
             "Ce document est confidentiel et destiné exclusivement au patient et à son équipe médicale.",
             S_FOOTER))
